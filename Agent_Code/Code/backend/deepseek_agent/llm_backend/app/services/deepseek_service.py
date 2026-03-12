@@ -20,8 +20,15 @@ class DeepseekService:
             base_url=settings.DEEPSEEK_BASE_URL
         )
         # 优先使用配置中的 DEEPSEEK_MODEL，其次使用传入的 model
-        self.model = settings.DEEPSEEK_MODEL or model 
-        self.cache = RedisSemanticCache(prefix="deepseek")
+        self.model = settings.DEEPSEEK_MODEL or model
+        # 根据配置决定是否启用语义缓存
+        self.cache_enabled = settings.ENABLE_SEMANTIC_CACHE
+        if self.cache_enabled:
+            self.cache = RedisSemanticCache(prefix="deepseek")
+            logger.info("Semantic cache enabled")
+        else:
+            self.cache = None
+            logger.info("Semantic cache disabled")
 
     async def _stream_cached_response(self, response: str, delay: float = 0.05) -> AsyncGenerator[str, None]:
         """模拟流式返回缓存的响应"""
@@ -32,7 +39,7 @@ class DeepseekService:
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
     async def generate_stream(
-        self, 
+        self,
         messages: List[Dict],
         user_id: Optional[int] = None,
         conversation_id: Optional[int] = None,
@@ -40,21 +47,28 @@ class DeepseekService:
     ) -> AsyncGenerator[str, None]:
         """流式生成回复"""
         try:
-            # 为每个用户创建独立的缓存实例
-            cache = RedisSemanticCache(prefix="deepseek", user_id=user_id)
-            
+            # 根据配置决定是否使用缓存
+            if self.cache_enabled:
+                # 为每个用户创建独立的缓存实例
+                cache = RedisSemanticCache(prefix="deepseek", user_id=user_id)
+            else:
+                cache = None
+
             start_time = time.time()
-            
-            # 检查缓存
-            cached_response = await cache.lookup(messages)
+
+            # 检查缓存（仅当启用时）
+            cached_response = None
+            if cache:
+                cached_response = await cache.lookup(messages)
+
             if cached_response:
                 response_time = time.time() - start_time
                 logger.info(f"Cache hit! Response time: {response_time:.4f} seconds")
-                
+
                 # 模拟流式返回，因为速率太快了
                 async for chunk in self._stream_cached_response(cached_response):
                     yield chunk
-                
+
                 if on_complete and user_id is not None and conversation_id is not None:
                     await on_complete(user_id, conversation_id, messages, cached_response)
                 return
@@ -77,12 +91,13 @@ class DeepseekService:
             
             # 完整响应
             complete_response = "".join(full_response)
-            
-            # 更新缓存
-            await cache.update(messages, complete_response)
-            
+
+            # 更新缓存（仅当启用时）
+            if cache:
+                await cache.update(messages, complete_response)
+
             response_time = time.time() - start_time
-            logger.info(f"Cache miss. Response time: {response_time:.4f} seconds")
+            logger.info(f"Request completed. Response time: {response_time:.4f} seconds")
             
             # 如果有回调，执行回调
             if on_complete and user_id is not None and conversation_id is not None:

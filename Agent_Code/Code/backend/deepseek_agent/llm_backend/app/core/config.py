@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str = ""
     REDIS_CACHE_EXPIRE: int = 3600
     REDIS_CACHE_THRESHOLD: float = 0.8
+    ENABLE_SEMANTIC_CACHE: bool = False  # 是否启用语义缓存（需要Ollama）
     
     # Embedding settings 
     EMBEDDING_TYPE: str = "ollama"  # ollama 或 sentence_transformer
