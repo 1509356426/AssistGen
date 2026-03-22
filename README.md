@@ -162,4 +162,14 @@ GraphRag最核心的优势是能体现实体关系，进行多跳推理，完成
 
 8：00-9：00：学了四个经典的Agent架构范式：Simple Agent、ReAct、Plan-and-Solve、Reflection，看了大致基础代码，了解了大致流程，和各个智能体的优缺点
 
-记忆系统、RAG和向量数据库
+记忆系统、RAG和向量数据库、工具类调用
+
+
+
+电商项目：
+
+
+
+![89310eb0a40253ea1097ba9387d79c25](README.assets/89310eb0a40253ea1097ba9387d79c25.png)
+
+![dd3c4cc2c13824558b0449a5ff721a69](README.assets/dd3c4cc2c13824558b0449a5ff721a69.png)
