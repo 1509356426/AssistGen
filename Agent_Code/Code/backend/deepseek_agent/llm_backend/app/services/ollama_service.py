@@ -3,6 +3,7 @@ import aiohttp
 import json
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.services.message_utils import sliding_window_messages
 
 logger = get_logger(service="ollama")
 
@@ -22,17 +23,20 @@ class OllamaService:
     ) -> AsyncGenerator[str, None]:
         """流式生成回复"""
         try:
+            # 滑动窗口裁剪：控制 Token 消耗
+            trimmed_messages = sliding_window_messages(messages)
+
             # 根据不同的用途使用不同的模型
             model = self.reason_model
             logger.info(f"Using model: {model}")
-            
+
             full_response = []
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.base_url}/api/chat",
                     json={
                         "model": model,
-                        "messages": messages,
+                        "messages": trimmed_messages,
                         "stream": True,
                         "keep_alive": -1,
                         "options": {
