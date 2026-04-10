@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.core.logger import get_logger, log_structured
 from app.core.middleware import LoggingMiddleware
+from app.core.metrics import metrics
 from app.core.config import settings
 from app.api import api_router
 from app.core.database import AsyncSessionLocal
@@ -90,6 +91,19 @@ class LangGraphResumeRequest(BaseModel):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+@app.get("/metrics")
+async def get_metrics():
+    """获取所有接口的性能监控指标"""
+    return metrics.get_all()
+
+@app.get("/metrics/{endpoint:path}")
+async def get_endpoint_metrics(endpoint: str):
+    """获取单个接口的性能指标"""
+    data = metrics.get_endpoint(f"/{endpoint}")
+    if not data:
+        raise HTTPException(status_code=404, detail=f"No metrics for /{endpoint}")
+    return data
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatMessage):
