@@ -7,6 +7,7 @@ from app.core.database import AsyncSessionLocal
 from app.models.conversation import Conversation, DialogueType
 from app.models.message import Message
 from app.services.redis_semantic_cache import RedisSemanticCache
+from app.services.message_utils import sliding_window_messages
 import time
 import asyncio
 
@@ -47,6 +48,9 @@ class DeepseekService:
     ) -> AsyncGenerator[str, None]:
         """流式生成回复"""
         try:
+            # 滑动窗口裁剪：控制 Token 消耗
+            trimmed_messages = sliding_window_messages(messages)
+
             # 根据配置决定是否使用缓存
             if self.cache_enabled:
                 # 为每个用户创建独立的缓存实例
@@ -59,7 +63,7 @@ class DeepseekService:
             # 检查缓存（仅当启用时）
             cached_response = None
             if cache:
-                cached_response = await cache.lookup(messages)
+                cached_response = await cache.lookup(trimmed_messages)
 
             if cached_response:
                 response_time = time.time() - start_time
@@ -77,7 +81,7 @@ class DeepseekService:
             full_response = []
             response = await self.client.chat.completions.create(
                 model=self.model,
-                messages=messages,
+                messages=trimmed_messages,
                 stream=True
             )
 
@@ -94,7 +98,7 @@ class DeepseekService:
 
             # 更新缓存（仅当启用时）
             if cache:
-                await cache.update(messages, complete_response)
+                await cache.update(trimmed_messages, complete_response)
 
             response_time = time.time() - start_time
             logger.info(f"Request completed. Response time: {response_time:.4f} seconds")
