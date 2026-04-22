@@ -1725,143 +1725,484 @@ DisposableBean.destroy() / destroy-method  ← @PreDestroy
 
 ### 一、FastAPI 是什么
 
-FastAPI 是 Python 的现代 Web 框架，核心特点：**快**（性能接近Go/Node.js）、**简单**（代码少）、**自动文档**（自带Swagger UI）。
+FastAPI 是 Python 的现代高性能 Web 框架，2018年发布，核心特点：
+
+| 特点 | 说明 |
+|------|------|
+| **快** | 性能接近 Go/Node.js，基于异步ASGI |
+| **简单** | 代码量少，用Python类型注解自动完成很多事 |
+| **自动文档** | 自动生成交互式Swagger UI和ReDoc文档 |
+| **类型安全** | Pydantic自动校验请求数据 |
+| **异步原生** | 原生支持async/await |
+
+#### FastAPI 技术栈关系
 
 ```text
-FastAPI 的核心依赖：
-├── Starlette    ← 底层HTTP框架（处理请求响应）
-├── Pydantic     ← 数据校验（校验请求参数）
-└── Uvicorn      ← ASGI服务器（运行FastAPI应用）
+你的请求 → Uvicorn(ASGI服务器) → Starlette(HTTP框架) → FastAPI(你的应用) → 响应
+                                        ↕
+                                   Pydantic(数据校验)
 ```
+
+| 组件 | 作用 | 类比 |
+|------|------|------|
+| **Uvicorn** | ASGI服务器，接收HTTP请求 | 类似Java的Tomcat |
+| **Starlette** | 底层HTTP/ASGI工具包 | 类似Servlet规范 |
+| **Pydantic** | 数据校验和序列化 | 类似Java的Bean Validation |
+| **FastAPI** | 在Starlette之上封装的框架 | 类似Spring MVC |
 
 ### 二、第一个 FastAPI 应用
 
 ```python
+# main.py
 from fastapi import FastAPI
 
-app = FastAPI()
+# 创建应用实例
+app = FastAPI(title="My API", description="API文档描述", version="1.0.0")
 
+# 定义路由：HTTP方法 + URL路径 + 处理函数
 @app.get("/")
 def root():
     return {"message": "Hello World"}
 
+# 路径参数：URL中的变量，自动类型校验
 @app.get("/users/{user_id}")
-def get_user(user_id: int):
+def get_user(user_id: int):       # int类型注解 → 自动校验，传字符串会报错
     return {"user_id": user_id}
+
+# 查询参数：URL中 ?key=value 的部分
+@app.get("/items/")
+def list_items(page: int = 1, size: int = 10):   # 有默认值的就是查询参数
+    return {"page": page, "size": size}
 ```
 
 ```bash
-uvicorn main:app --reload    # --reload 开发热重载
-# 访问 http://localhost:8000/docs 自动生成Swagger文档
+# 启动服务器
+uvicorn main:app --reload
+# main:app = main.py文件中的app变量
+# --reload = 代码修改后自动重启（开发模式）
+
+# 访问：
+# http://localhost:8000/          → {"message": "Hello World"}
+# http://localhost:8000/users/123 → {"user_id": 123}
+# http://localhost:8000/users/abc → 自动报错："user_id is not a valid integer"
+# http://localhost:8000/items/?page=2&size=20 → {"page": 2, "size": 20}
+# http://localhost:8000/docs      → 自动生成的Swagger交互式文档
 ```
 
-### 三、Pydantic 数据校验
+**为什么能自动生成文档？** FastAPI读取路由定义和类型注解，自动生成OpenAPI(Swagger)规范。
+
+### 三、Pydantic 数据校验（核心重点）
+
+Pydantic 是 FastAPI 的数据校验引擎。核心思路：**用 Python 类型注解定义数据结构，自动校验 + 自动转换**。
 
 ```python
 from pydantic import BaseModel, Field
+from typing import Optional
 
+# 定义请求体模型
 class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=20)
-    email: str = Field(..., pattern=r"^[\w.-]+@[\w.-]+\.\w+$")
-    age: int = Field(default=18, ge=0, le=150)
+    username: str = Field(
+        ...,                          # ... 表示必填
+        min_length=3,                 # 最短3个字符
+        max_length=20,                # 最长20个字符
+        description="用户名"
+    )
+    email: str = Field(
+        ...,
+        pattern=r"^[\w.-]+@[\w.-]+\.\w+$",   # 正则校验邮箱格式
+    )
+    age: int = Field(
+        default=18,                   # 默认值，非必填
+        ge=0,                         # greater than or equal ≥ 0
+        le=150,                       # less than or equal ≤ 150
+    )
+    hobbies: Optional[list[str]] = None   # 可选字段
 
-@app.post("/users")
-def create_user(user: UserCreate):
-    return {"username": user.username, "email": user.email}
+# 在路由中使用
+@app.post("/users", status_code=201)
+def create_user(user: UserCreate):            # 自动从Body JSON解析并校验
+    return {"username": user.username, "email": user.email, "age": user.age}
 ```
 
-> **面试一句话：** "Pydantic用BaseModel+类型注解自动校验请求参数，校验失败自动返回422错误。"
+**自动校验效果：**
+
+```json
+// 正常请求：
+POST /users  {"username": "zhangsan", "email": "zs@mail.com", "age": 25}
+// 响应 201：{"username": "zhangsan", "email": "zs@mail.com", "age": 25}
+
+// 校验失败请求：
+POST /users  {"username": "ab", "email": "invalid", "age": 200}
+// 自动响应 422 Unprocessable Entity：
+{
+    "detail": [
+        {"loc": ["body", "username"], "msg": "String should have at least 3 characters"},
+        {"loc": ["body", "email"], "msg": "String should match pattern..."},
+        {"loc": ["body", "age"], "msg": "Input should be less than or equal to 150"}
+    ]
+}
+```
+
+**Pydantic 常用验证器：**
+
+| 类型 | Field约束 | 说明 |
+|------|-----------|------|
+| `str` | `min_length`, `max_length`, `pattern` | 字符串长度和正则 |
+| `int` / `float` | `ge`(≥), `gt`(>), `le`(≤), `lt`(<) | 数值范围 |
+| `list[T]` | `min_length`, `max_length` | 列表长度 |
+| `Optional[T]` | `default=None` | 可选字段 |
+
+**响应模型：** 用 `response_model=UserResponse` 控制返回字段，防止密码等敏感数据泄露。
+
+> **面试一句话：** "Pydantic用BaseModel+类型注解自动校验请求参数，校验失败自动返回422和详细错误。还支持response_model控制响应字段，防止敏感数据泄露。"
 
 ### 四、参数获取的四种方式
 
-| 方式 | 数据来源 | 示例 |
-|------|----------|------|
-| 路径参数 | URL路径 | `/users/{id}` |
-| 查询参数 | `?key=value` | `?page=1&size=10` |
-| 请求体 | Body JSON | `{"name": "test"}` |
-| Header/Cookie | 请求头/Cookie | `Authorization: Bearer xxx` |
-
-### 五、依赖注入
-
 ```python
-async def get_current_user(token: str = Header(...)):
-    user = verify_token(token)
-    if not user:
-        raise HTTPException(status_code=401)
-    return user
+from fastapi import Path, Query, Header, Cookie, Depends
 
-@app.get("/me")
-def get_me(user = Depends(get_current_user)):
-    return {"username": user.username}
+# 1. 路径参数：URL中的变量
+@app.get("/users/{user_id}")
+def get_user(user_id: int = Path(..., ge=1)):
+    return {"user_id": user_id}
+# 请求：GET /users/123
+
+# 2. 查询参数：URL中 ?key=value
+@app.get("/items")
+def list_items(
+    keyword: str = Query(default="", max_length=50),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=10, ge=1, le=100),
+):
+    return {"keyword": keyword, "page": page, "size": size}
+# 请求：GET /items?keyword=手机&page=2&size=20
+
+# 3. 请求体：POST/PUT的JSON数据
+@app.post("/items")
+def create_item(item: ItemCreate):    # BaseModel自动解析Body JSON
+    return item
+# 请求：POST /items  Body: {"name": "手机", "price": 2999.0}
+
+# 4. Header / Cookie
+@app.get("/profile")
+def get_profile(
+    authorization: str = Header(...),
+    session_id: str = Cookie(default=None),
+):
+    return {"token": authorization, "session": session_id}
 ```
 
-> **面试一句话：** "Depends()将认证等横切逻辑抽成函数注入路由，类似Spring IoC但用函数实现。"
+### 五、依赖注入（Dependency Injection）深入
 
-### 六、中间件
+FastAPI 依赖注入类似 Spring IoC，但用函数实现更轻量。
+
+#### 基本用法：数据库连接
+
+```python
+# 定义依赖：获取数据库会话
+async def get_db():
+    db = AsyncSessionLocal()
+    try:
+        yield db           # yield = 生成器依赖，请求结束后执行finally
+    finally:
+        await db.close()   # 请求结束自动关闭连接
+
+# 使用依赖
+@app.get("/users")
+async def list_users(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User))
+    return result.scalars().all()
+```
+
+#### 高级用法：认证 + 权限（嵌套依赖）
+
+```python
+from fastapi.security import HTTPBearer
+
+security = HTTPBearer()
+
+# 依赖1：验证Token，返回当前用户
+async def get_current_user(credentials = Security(security)):
+    token = credentials.credentials
+    payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    if not payload:
+        raise HTTPException(status_code=401)
+    return {"user_id": payload["sub"], "role": payload["role"]}
+
+# 依赖2：在依赖1基础上检查权限（嵌套依赖）
+async def require_admin(user = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403)
+    return user
+
+# 路由：层层依赖注入
+@app.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    admin = Depends(require_admin),   # 先验证Token → 再验证权限
+    db = Depends(get_db),              # 获取数据库连接
+):
+    await db.execute(delete(User).where(User.id == user_id))
+    await db.commit()
+    return {"message": "删除成功"}
+```
+
+**依赖注入执行流程：**
+
+```text
+请求到达 DELETE /users/123
+  │
+  ├── 1. require_admin 依赖
+  │     └── get_current_user 依赖
+  │           └── Security从Header提取Token
+  │           └── jwt.decode验证Token → 拿到user信息
+  │     └── 检查role=="admin" → 通过
+  ├── 2. get_db 依赖 → 创建数据库连接
+  ├── 3. 执行 delete_user 业务逻辑
+  ├── 4. finally关闭数据库连接
+  └── 5. 返回响应
+```
+
+> **面试一句话：** "FastAPI依赖注入通过Depends()将认证、权限、数据库等横切逻辑抽成独立函数。依赖可以嵌套（权限依赖认证），请求结束后通过yield的finally自动清理资源。类似Spring IoC但用函数实现更轻量。"
+
+### 六、中间件（Middleware）深入
+
+中间件在每个请求前后统一执行逻辑，类似 Spring AOP 的切面。
+
+#### 日志中间件
 
 ```python
 @app.middleware("http")
-async def log_middleware(request: Request, call_next):
-    start = time.time()
-    response = await call_next(request)
-    print(f"耗时: {time.time()-start:.3f}s")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    logger.info(f"{request.method} {request.url}")    # 请求前
+    response = await call_next(request)                # 执行后续处理
+    duration = time.time() - start_time
+    logger.info(f"→ {response.status_code} ({duration:.3f}s)")  # 请求后
+    response.headers["X-Process-Time"] = str(duration)
     return response
 ```
 
-**CORS（前后端分离必配）：** 浏览器同源策略限制跨域请求，需后端配置 `CORSMiddleware` 允许前端跨域访问。
+#### CORS 中间件（前后端分离必配）
 
-### 七、面试高频 Q&A
+```python
+from fastapi.middleware.cors import CORSMiddleware
 
-**Q1：FastAPI的特点？** > 异步ASGI高性能、Pydantic自动校验、自带Swagger文档。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # 允许的前端地址
+    allow_credentials=True,                   # 允许携带Cookie
+    allow_methods=["*"],                      # 允许的HTTP方法
+    allow_headers=["*"],                      # 允许的请求头
+)
+```
 
-**Q2：依赖注入？** > Depends()将通用逻辑（认证、数据库）抽成函数自动注入。
+**为什么需要CORS？** 浏览器同源策略限制了跨域请求。前端 `localhost:5173` 请求后端 `localhost:8000` 端口不同就是跨域。CORS中间件在响应头中加 `Access-Control-Allow-Origin` 告诉浏览器允许跨域。
 
-**Q3：Pydantic的作用？** > BaseModel+类型注解自动校验参数，失败返回422。
+**CORS预检请求(Preflight)：** 非简单请求（如带Authorization头）浏览器会先发OPTIONS请求询问后端是否允许跨域，CORS中间件自动处理。
+
+### 七、异步 async/await 完整应用
+
+```python
+# 异步路由：有IO操作（数据库、HTTP请求）用async def
+@app.get("/users/{user_id}")
+async def get_user(user_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.id == user_id))
+    return result.scalar_one_or_none()
+
+# 同步路由：纯CPU计算用普通def，FastAPI自动放到线程池执行
+@app.get("/fibonacci/{n}")
+def compute_fibonacci(n: int):
+    return {"result": fibonacci(n)}
+```
+
+**选择原则：** 有IO操作用 `async def`，纯CPU计算用普通 `def`。
+
+#### SSE 流式响应（主人项目一核心功能）
+
+```python
+from fastapi.responses import StreamingResponse
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest):
+    async def generate():
+        async for chunk in agent.stream(request.message):
+            yield f"data: {json.dumps({'content': chunk})}\n\n"  # 逐token返回
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+```
+
+**效果：** LLM生成的文字逐字返回给前端，类似ChatGPT的打字效果。
+
+**异步为什么快：** 等IO时通过await让出CPU去处理其他请求，单线程就能处理大量并发。
+
+```text
+同步：请求1(等DB 2s) → 请求2(等DB 2s) → 请求3(等DB 2s) = 总计6s
+异步：请求1(等DB) → 请求2(等DB) → 请求3(等DB) 同时等 = 总计2s
+```
+
+### 八、与主人项目的关联
+
+```python
+# 主人项目一后端实际代码结构
+app = FastAPI(title="AssistGen API")
+app.add_middleware(CORSMiddleware, allow_origins=["*"])
+
+# OAuth2认证
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    payload = verify_token(token)
+    if not payload: raise HTTPException(401)
+    return payload
+
+# SSE流式聊天
+@app.post("/api/chat")
+async def chat(request: ChatRequest, user = Depends(get_current_user)):
+    async for chunk in llm_service.stream(request.message):
+        yield chunk
+
+# LangGraph Agent查询
+@app.post("/api/langgraph/query")
+async def langgraph_query(request: QueryRequest, user = Depends(get_current_user), db = Depends(get_db)):
+    result = await agent.run(request.query)
+    return result
+```
+
+### 九、面试高频 Q&A
+
+**Q1：FastAPI的特点？为什么选它？**
+
+> FastAPI基于Starlette+Pydantic，性能高（ASGI异步）、开发效率高（类型注解自动校验+自动生成Swagger文档）、原生支持async/await。选它是因为Python生态好、异步性能强、自动文档减少前后端沟通成本。
+
+**Q2：FastAPI依赖注入和Spring IoC异同？**
+
+> 相同：都是将依赖的创建管理交给框架实现解耦。不同：Spring基于类和@Autowired注解，FastAPI基于函数和Depends()更轻量。FastAPI支持嵌套依赖（权限依赖认证），yield的finally自动清理资源。
+
+**Q3：Pydantic的作用？**
+
+> BaseModel+类型注解自动校验参数类型、范围、格式，校验失败自动返回422。response_model控制响应字段防止敏感数据泄露。
+
+**Q4：FastAPI怎么实现流式响应？**
+
+> StreamingResponse + async generator实现SSE。路由用async for逐个yield LLM生成的token，前端通过ReadableStream实时接收，实现类似ChatGPT的逐字输出。
 
 ---
 
 ## 5.2 RESTful API 设计
 
-### 一、REST 核心原则
+### 一、REST 是什么
 
-- URL表示资源（名词），HTTP方法表示操作（动词）
-- 无状态（每次请求自带Token）
+REST（Representational State Transfer）是一种 API 设计风格，三大核心原则：
 
-### 二、设计规范
+1. **URL 表示资源（名词）**：描述"是什么"而非"做什么"
+2. **HTTP 方法表示操作（动词）**：GET/POST/PUT/DELETE 对应增删改查
+3. **无状态**：每次请求自带所有信息，服务器不保存会话
 
-| 操作 | URL | HTTP方法 | 状态码 |
-|------|-----|----------|--------|
-| 获取列表 | `/users` | GET | 200 |
-| 获取单个 | `/users/123` | GET | 200 |
-| 创建 | `/users` | POST | 201 |
-| 全量更新 | `/users/123` | PUT | 200 |
-| 部分更新 | `/users/123` | PATCH | 200 |
-| 删除 | `/users/123` | DELETE | 204 |
+### 二、URL 设计规范
 
-### 三、面试高频 Q&A
+```text
+正确：GET  /users          ← 名词复数 + HTTP方法当动词
+错误：POST /getUsers       ← 不要把动词放在URL里！
+```
 
-**Q1：什么是RESTful？** > URL名词+HTTP动词+无状态通信。
+| 操作 | URL | HTTP方法 | 状态码 | 说明 |
+|------|-----|----------|--------|------|
+| 获取列表 | `GET /users` | GET | 200 | 返回所有用户 |
+| 获取单个 | `GET /users/123` | GET | 200 | 返回ID=123的用户 |
+| 创建 | `POST /users` | POST | 201 Created | Body携带用户数据 |
+| 全量更新 | `PUT /users/123` | PUT | 200 | 必须传完整资源 |
+| 部分更新 | `PATCH /users/123` | PATCH | 200 | 只传需要修改的字段 |
+| 删除 | `DELETE /users/123` | DELETE | 204 No Content | 成功无返回体 |
 
-**Q2：PUT vs PATCH？** > PUT全量更新，PATCH部分更新。
+嵌套资源：`GET /users/123/orders` = 获取用户123的所有订单
 
-**Q3：为什么无状态？** > 服务器不保存会话，便于水平扩展。
+### 三、PUT vs PATCH（面试常问）
+
+```json
+// 原始数据：{"id": 1, "name": "张三", "age": 25, "email": "zs@mail.com"}
+
+// PUT 全量更新：必须传完整数据，没传的字段会被覆盖为null
+PUT /users/1
+{"name": "张三", "age": 26, "email": "zs@mail.com"}
+
+// PATCH 部分更新：只传需要修改的字段，其他不变
+PATCH /users/1
+{"age": 26}
+```
+
+### 四、分页、过滤、排序
+
+```text
+分页：GET /users?page=1&size=10
+过滤：GET /users?role=admin&age_gt=18
+排序：GET /users?sort=created_at&order=desc
+```
+
+### 五、无状态设计（面试必问）
+
+**有状态（Session）问题：** 服务器要存Session，重启丢失，分布式难以共享。
+
+**无状态（Token）好处：** 服务器不存会话，天然支持分布式，重启不影响用户。
+
+```text
+POST /login → 返回JWT Token
+GET /profile + Header: Authorization: Bearer <token> → 验证签名即可
+```
+
+> **面试一句话：** "RESTful要求无状态，每次请求自带Token。服务器不保存会话，天然支持水平扩展和分布式部署。"
+
+### 六、面试高频 Q&A
+
+**Q1：什么是RESTful？**
+
+> URL名词+HTTP动词+无状态。GET获取、POST创建、PUT全量更新、PATCH部分更新、DELETE删除。
+
+**Q2：PUT和PATCH的区别？**
+
+> PUT全量更新必须传完整资源；PATCH部分更新只传修改的字段。实际开发中PATCH更常用。
+
+**Q3：为什么无状态？**
+
+> 无状态让每次请求独立，服务器不保存会话，便于水平扩展和分布式部署。认证用JWT Token。
 
 ---
 
 ## 5.3 设计模式（单例/工厂/观察者/策略）
 
-### 一、单例模式
+### 一、设计原则速记
 
-**核心：** 全局唯一实例。**DCL实现：** volatile + 双重检查。
+> **开闭原则（最重要）：** 对扩展开放，对修改关闭。加新功能不修改已有代码，通过新增类/方法扩展。
+
+### 二、单例模式（Singleton）
+
+**核心：** 一个类全局只有一个实例。
+
+#### 饿汉式（线程安全，类加载时就创建）
+
+```java
+public class Singleton {
+    private static final Singleton INSTANCE = new Singleton();
+    private Singleton() {}
+    public static Singleton getInstance() { return INSTANCE; }
+}
+```
+
+缺点：不管用不用都会创建，浪费内存。
+
+#### 懒汉式 DCL（面试必问）
 
 ```java
 public class Singleton {
     private static volatile Singleton instance;
     private Singleton() {}
     public static Singleton getInstance() {
-        if (instance == null) {
+        if (instance == null) {                    // 第一次检查（避免不必要的锁）
             synchronized (Singleton.class) {
-                if (instance == null) instance = new Singleton();
+                if (instance == null) {            // 第二次检查（防止并发重复创建）
+                    instance = new Singleton();
+                }
             }
         }
         return instance;
@@ -1869,41 +2210,118 @@ public class Singleton {
 }
 ```
 
-> volatile禁止指令重排序，两次null检查避免重复创建。
+**为什么要两次null检查？**
 
-### 二、工厂模式
-
-**核心：** 封装对象创建，调用方不关心具体类。
-
-```java
-class AnimalFactory {
-    static Animal create(String type) {
-        if ("dog".equals(type)) return new Dog();
-        if ("cat".equals(type)) return new Cat();
-    }
-}
+```text
+线程A和B同时调用getInstance()：
+① 两个线程都通过第一次检查(instance == null)  ← 没锁，可以并发
+② 线程A获取锁，创建实例，释放锁
+③ 线程B获取锁，如果没有第二次检查 → 又创建一个实例！
+④ 所以锁里面还要再检查一次
 ```
 
-### 三、观察者模式
+**为什么要volatile？**
 
-**核心：** 一对多通知。状态变化时自动通知所有观察者。
+```text
+new Singleton() 分三步：①分配内存 → ②初始化对象 → ③引用赋值
+JVM可能重排序为 ①→③→②，导致线程B拿到未初始化的对象
+volatile禁止指令重排序，保证按顺序执行
+```
 
-**应用：** Vue响应式、Spring事件机制、消息队列。
+> **面试一句话：** "DCL双重检查锁+volatile是最经典的单例实现。volatile禁止指令重排序，两次null检查——第一次避免不必要的锁，第二次防止并发重复创建。"
 
-### 四、策略模式
+### 三、工厂模式（Factory）
+
+**核心：** 封装对象创建，调用方不依赖具体类。
+
+```java
+interface LLMService { String chat(String message); }
+class DeepSeekService implements LLMService { ... }
+class OllamaService implements LLMService { ... }
+
+class LLMFactory {
+    public static LLMService create(String provider) {
+        if ("deepseek".equals(provider)) return new DeepSeekService();
+        if ("ollama".equals(provider)) return new OllamaService();
+        throw new IllegalArgumentException("不支持: " + provider);
+    }
+}
+// 调用方只依赖接口，不关心具体实现
+LLMService service = LLMFactory.create("deepseek");
+```
+
+> **面试一句话：** "工厂模式将对象创建与使用解耦。调用方只依赖接口不依赖具体实现，新增实现时调用方代码不用改。"
+
+### 四、观察者模式（Observer）
+
+**核心：** 一对多依赖，状态变化时自动通知所有观察者。
+
+```java
+interface OrderEventListener { void onOrderCreated(Order order); }
+
+class OrderService {
+    private List<OrderEventListener> listeners = new ArrayList<>();
+    void addListener(OrderEventListener l) { listeners.add(l); }
+    void createOrder(Order order) {
+        orderDao.save(order);                     // 核心业务
+        for (OrderEventListener l : listeners) {  // 通知所有观察者
+            l.onOrderCreated(order);
+        }
+    }
+}
+
+// 各自独立处理：发邮件、扣库存、加积分
+orderService.addListener(new EmailNotifier());
+orderService.addListener(new InventoryUpdater());
+orderService.addListener(new PointsService());
+```
+
+**应用场景：** Vue响应式(数据→视图)、Spring事件机制、消息队列(发布订阅)
+
+> **面试一句话：** "观察者模式是一对多依赖，状态变化自动通知。好处是解耦：被观察者不需要知道有哪些观察者，新增观察者不影响已有代码。"
+
+### 五、策略模式（Strategy）
 
 **核心：** 算法封装为独立策略类，运行时可替换。消除if-else，符合开闭原则。
 
-**应用：** 主人项目中LLMFactory切换DeepSeek/Ollama就是策略模式。
+```java
+interface PaymentStrategy { void pay(double amount); }
+class AlipayStrategy implements PaymentStrategy { public void pay(double a) { /* 支付宝 */ } }
+class WechatPayStrategy implements PaymentStrategy { public void pay(double a) { /* 微信 */ } }
 
-### 五、总结
+class PaymentContext {
+    private PaymentStrategy strategy;
+    void setStrategy(PaymentStrategy s) { this.strategy = s; }
+    void pay(double amount) { strategy.pay(amount); }
+}
 
-| 模式 | 核心思想 | 项目体现 |
-|------|----------|---------|
-| 单例 | 全局唯一 | LLMFactory |
-| 工厂 | 封装创建 | LLMFactory |
-| 观察者 | 一对多通知 | Vue响应式 |
-| 策略 | 算法可替换 | LLM Provider切换 |
+// 运行时切换策略
+ctx.setStrategy(new AlipayStrategy());  ctx.pay(100);
+ctx.setStrategy(new WechatPayStrategy()); ctx.pay(200);  // 切换！
+// 新增支付方式？只新增一个策略类，不改已有代码
+```
+
+```java
+// ❌ 没有策略模式：一堆if-else
+void pay(String type, double amount) {
+    if ("alipay".equals(type)) { ... }
+    else if ("wechat".equals(type)) { ... }
+    else if ("bank".equals(type)) { ... }   // 每加一种就改这里
+}
+
+// ✅ 有策略模式：加新支付方式只新增一个策略类，符合开闭原则
+```
+
+> **面试一句话：** "策略模式将不同算法封装为独立策略类，运行时切换。消除if-else，新增策略只新增类不修改已有代码，完全符合开闭原则。"
+
+### 六、总结
+
+| 模式 | 核心思想 | 解决什么问题 | 项目体现 |
+|------|----------|-------------|---------|
+| 单例 | 全局唯一实例 | 避免重复创建浪费资源 | LLMFactory、连接池 |
+| 工厂 | 封装创建逻辑 | 调用方不依赖具体类 | LLMFactory创建服务 |
+| 观察者 | 一对多通知 | 解耦事件发送和接收 | Vue响应式、Spring事件 |
+| 策略 | 算法可替换 | 消除if-else | LLM Provider切换 |
 
 ---
 
@@ -1914,240 +2332,2197 @@ class AnimalFactory {
 ### 一、CRUD 增删改查
 
 ```sql
+-- 创建表
 CREATE TABLE users (
     id INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(50) NOT NULL,
     age INT DEFAULT 0,
-    email VARCHAR(100) UNIQUE
+    email VARCHAR(100) UNIQUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 增
 INSERT INTO users (name, age, email) VALUES ('张三', 25, 'zs@mail.com');
-DELETE FROM users WHERE id = 1;
-UPDATE users SET age = 26 WHERE name = '张三';
-SELECT name, age FROM users WHERE age > 20 ORDER BY age DESC LIMIT 10;
+INSERT INTO users (name, age) VALUES ('李四', 30), ('王五', 28);  -- 批量插入
+
+-- 删
+DELETE FROM users WHERE id = 1;          -- 条件删除（可回滚）
+TRUNCATE TABLE users;                     -- 清空整表（更快，不可回滚，重置自增ID）
+
+-- 改
+UPDATE users SET age = 26, name = '张三丰' WHERE name = '张三';
+
+-- 查
+SELECT * FROM users;                                         -- 所有字段
+SELECT name, age FROM users WHERE age > 20;                  -- 指定字段+条件
+SELECT * FROM users ORDER BY age DESC LIMIT 10 OFFSET 20;    -- 排序+分页
+SELECT COUNT(*), AVG(age) FROM users WHERE age > 20;         -- 聚合函数
 ```
 
-### 二、DELETE vs TRUNCATE
+### 二、DELETE vs TRUNCATE（面试常问）
 
 |  | DELETE | TRUNCATE |
 |--|-------|----------|
 | 本质 | DML，逐行删除 | DDL，删除表再重建 |
 | WHERE | 支持 | 不支持 |
-| 速度 | 慢 | 快 |
-| 回滚 | 可以 | 不可以 |
-| 自增ID | 不重置 | 重置 |
+| 速度 | 慢（逐行记录undo log） | 快（直接释放数据页） |
+| 回滚 | 可以（有undo log） | 不可以 |
+| 自增ID | 不重置 | 重置为1 |
+| 触发器 | 触发DELETE触发器 | 不触发 |
 
-### 三、JOIN 连接查询
+> **面试一句话：** "DELETE是DML逐行删除可回滚，TRUNCATE是DDL重建表不可回滚但速度快。清空大表用TRUNCATE，条件删除用DELETE。"
+
+### 三、JOIN 连接查询（面试必问）
 
 ```sql
--- 内连接：只返回两表都有匹配的行
-SELECT u.name, o.amount FROM users u INNER JOIN orders o ON u.id = o.user_id;
+-- 内连接(INNER JOIN)：只返回两表都有匹配的行
+SELECT u.name, o.amount
+FROM users u INNER JOIN orders o ON u.id = o.user_id;
+-- 结果：张三-100, 张三-200, 李四-150（王五无订单被排除）
 
--- 左连接：左表全保留，右表没匹配填NULL
-SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id;
+-- 左连接(LEFT JOIN)：左表全保留，右表没匹配填NULL
+SELECT u.name, o.amount
+FROM users u LEFT JOIN orders o ON u.id = o.user_id;
+-- 结果：张三-100, 张三-200, 李四-150, 王五-NULL
 ```
 
-### 四、WHERE vs HAVING
+### 四、GROUP BY + 聚合函数 + SQL执行顺序
+
+```sql
+SELECT user_id, COUNT(*) as order_count, SUM(amount) as total
+FROM orders
+WHERE status = 'paid'              -- WHERE：分组前过滤原始行
+GROUP BY user_id
+HAVING total > 100                 -- HAVING：分组后过滤结果（能用聚合函数）
+ORDER BY total DESC
+LIMIT 10;
+```
+
+**SQL执行顺序（面试常问）：** `FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT`
 
 |  | WHERE | HAVING |
 |--|-------|--------|
 | 过滤时机 | 分组前 | 分组后 |
 | 能用聚合函数 | 不能 | 能 |
 
-### 五、面试 Q&A
+### 五、子查询与 IN vs EXISTS
 
-**DELETE vs TRUNCATE？** > DELETE逐行删除可回滚，TRUNCATE重建表不可回滚。
-**INNER JOIN vs LEFT JOIN？** > INNER取交集，LEFT左表全保留。
+|  | IN | EXISTS |
+|--|-----|--------|
+| 子表结果小 | 优先用IN | - |
+| 外表数据小 | - | 优先用EXISTS |
+
+### 六、面试高频 Q&A
+
+**Q1：DELETE和TRUNCATE的区别？**
+
+> DELETE是DML逐行删除支持WHERE可回滚；TRUNCATE是DDL重建表不支持WHERE不可回滚但速度快，且重置自增ID。
+
+**Q2：INNER JOIN和LEFT JOIN的区别？**
+
+> INNER JOIN只返回两表匹配的行（取交集）；LEFT JOIN返回左表所有行，右表无匹配填NULL。
+
+**Q3：WHERE和HAVING的区别？**
+
+> WHERE在分组前过滤原始行不能用聚合函数；HAVING在分组后过滤能用聚合函数(COUNT/SUM等)。
 
 ---
 
 ## 2.2 MySQL 索引
 
-### 一、B+ 树结构（面试必问）
+### 一、为什么需要索引
+
+没有索引要全表扫描，100万行比较100万次。有索引通过B+树快速定位，100万行只需约20次比较。
+
+### 二、B+ 树结构（面试必问）
 
 ```text
                     [30 | 60]                     ← 根节点（只存key）
                   ╱          ╲
-         [10|20|30]        [40|50|60]              ← 中间节点
+         [10|20|30]        [40|50|60]              ← 中间节点（只存key）
         ╱    |    ╲        ╱    |    ╲
-     [1-10] [11-20] [21-30] [31-40] [41-50] [51-60] ← 叶子节点（key+数据）
+     [1-10] [11-20] [21-30] [31-40] [41-50] [51-60] ← 叶子节点（key+完整数据）
+        ↑      ↑      ↑      ↑      ↑      ↑
         └──────┴──────┴──────┴──────┴──────┘
-              叶子节点双向链表连接 → 范围查询极快
+              叶子节点之间用双向链表连接
 ```
 
-**B+树特点：** 非叶子节点只存key（树更矮IO更少），数据全在叶子（查询稳定），叶子链表（范围查询快）。
+**B+ 树的三大特点（为什么选B+树）：**
 
-> **面试一句话：** "B+树非叶子只存key使树更矮，叶子链表支持范围查询，这是MySQL选择B+树的原因。"
+| 特点 | 说明 | 好处 |
+|------|------|------|
+| 非叶子节点只存key | 中间节点不存数据，能存更多key | 树更矮，磁盘IO更少（InnoDB一页16KB能存上百个key） |
+| 数据全在叶子节点 | 查任何数据都要走到叶子 | 查询性能稳定（都是O(log n)） |
+| 叶子节点双向链表 | 范围查询时顺着链表走 | 范围查询极快（WHERE id BETWEEN 10 AND 50） |
 
-### 二、聚簇索引 vs 非聚簇索引
+**为什么不用其他数据结构？**
 
-|  | 聚簇索引（主键） | 非聚簇索引（二级） |
-|--|------------------|-------------------|
-| 叶子存什么 | 完整行数据 | 主键ID |
-| 数量 | 一张表只有一个 | 可以有多个 |
-| 查找 | 直接拿到数据 | 需要回表查主键索引 |
+| 数据结构 | 问题 |
+|----------|------|
+| 二叉搜索树 | 100万数据树高约20层，每层一次磁盘IO太慢 |
+| Hash | 等值查询O(1)极快，但不支持范围查询和排序 |
+| B树 | 非叶子节点也存数据，每层能存的key少，树更高 |
 
-**回表：** 二级索引查到主键ID → 回主键索引查完整数据（查两棵树）。
+> **面试一句话：** "MySQL用B+树因为：非叶子只存key使树更矮减少IO，数据全在叶子使查询稳定，叶子链表使范围查询高效。不用Hash因为不支持范围查询。"
 
-### 三、覆盖索引
+### 三、聚簇索引 vs 非聚簇索引（面试高频）
+
+**聚簇索引（主键索引）：** 叶子节点直接存完整行数据，一张表只有一个。
+
+**非聚簇索引（二级索引）：** 叶子节点存主键ID，需要**回表**查主键索引树拿完整数据。
+
+```text
+查找 name='张三' 的完整数据（name有二级索引）：
+步骤1：在name索引树找到 name='张三' → 得到主键 id=5
+步骤2：回主键索引树用 id=5 找完整行数据    ← 这就是"回表"
+```
+
+### 四、覆盖索引（面试常问）
 
 查询的所有字段都在索引中，不需要回表。EXPLAIN的Extra显示 `Using index`。
 
-### 四、最左前缀匹配
-
-联合索引 `(name, age, email)` 从最左列开始匹配，遇到范围查询停止。
-
 ```sql
--- ✅ name / name,age / name,age,email 都能用
--- ❌ 跳过name直接查age或email不能用
--- ⚠️ name='张三' AND age > 20 AND email='...' 只能用到name和age
+-- 联合索引 idx_name_age (name, age)
+-- ✅ 覆盖索引：只需要name和age，索引里都有，不回表
+SELECT name, age FROM users WHERE name = '张三';
+-- ❌ 不是覆盖索引：还需要email，索引里没有，得回表
+SELECT name, age, email FROM users WHERE name = '张三';
 ```
 
-### 五、索引失效场景
+> **面试一句话：** "覆盖索引是查询字段都在索引中不需要回表。EXPLAIN中Extra显示Using index。实际优化中把常用查询字段建成联合索引实现覆盖。"
 
-| 场景 | 示例 |
-|------|------|
-| 函数计算 | `WHERE YEAR(create_time) = 2024` |
-| 隐式类型转换 | `WHERE varchar_col = 123` |
-| LIKE左模糊 | `WHERE name LIKE '%张'` |
-| OR无索引列 | `WHERE name='张三' OR age=25`（age无索引） |
+### 五、最左前缀匹配（面试必问）
 
-### 六、面试 Q&A
+联合索引 `(name, age, email)` 的匹配规则：从最左列开始，不能跳过中间列，遇范围查询停止。
 
-**为什么用B+树？** > 非叶子只存key树更矮，叶子链表支持范围查询。
-**什么是回表？** > 二级索引查到主键后回主键索引查完整数据。覆盖索引可避免。
-**最左前缀？** > 从最左列开始匹配，遇范围查询停止。
+```sql
+-- ✅ 能用索引
+WHERE name = '张三'                                    -- 匹配name
+WHERE name = '张三' AND age = 25                       -- 匹配name,age
+WHERE name = '张三' AND age = 25 AND email = 'zs@...'  -- 匹配全部
+
+-- ❌ 不能用（跳过了最左列name）
+WHERE age = 25
+WHERE email = 'zs@...'
+
+-- ⚠️ 只能用到name（age用了范围查询，后面的email断了）
+WHERE name = '张三' AND age > 20 AND email = 'zs@...'
+```
+
+### 六、索引失效场景（面试必问）
+
+| 场景 | 示例 | 优化方法 |
+|------|------|----------|
+| 函数计算 | `WHERE YEAR(create_time) = 2024` | `WHERE create_time >= '2024-01-01'` |
+| 隐式类型转换 | `WHERE varchar_col = 123` | 确保类型一致 `= '123'` |
+| LIKE左模糊 | `WHERE name LIKE '%张'` | 用全文索引或ES |
+| OR无索引列 | `WHERE name='张三' OR age=25` | 给age也加索引 |
+| 不等于 | `WHERE name != '张三'` | 视情况改用IN |
+
+### 七、面试高频 Q&A
+
+**Q1：为什么MySQL用B+树做索引？**
+
+> 非叶子只存key树更矮IO更少，数据全在叶子查询稳定，叶子链表支持高效范围查询。
+
+**Q2：什么是回表？怎么避免？**
+
+> 二级索引查到主键后要回主键索引查完整数据叫回表。用覆盖索引（查询字段都在索引中）可避免。
+
+**Q3：什么是最左前缀原则？**
+
+> 联合索引从最左列开始依次匹配，不能跳过，遇范围查询停止。区分度高的字段放左边。
 
 ---
 
 ## 2.3 MySQL 事务
 
-### 一、ACID 四大特性
+### 一、事务是什么？
 
-| 特性 | 含义 | 实现方式 |
-|------|------|----------|
-| 原子性(A) | 全做或全不做 | undo log |
-| 一致性(C) | 满足约束 | 由A+I+D保证 |
-| 隔离性(I) | 并发互不干扰 | 锁 + MVCC |
-| 持久性(D) | 永久保存 | redo log |
+事务（Transaction）是把一组 SQL 操作打包成一个**不可分割的工作单元**，要么全部成功，要么全部回滚。
 
-### 二、并发事务问题
+```sql
+-- 典型事务：银行转账（A给B转100元）
+START TRANSACTION;                          -- 开启事务
+UPDATE account SET balance = balance - 100 WHERE name = 'A';  -- A扣钱
+UPDATE account SET balance = balance + 100 WHERE name = 'B';  -- B加钱
+COMMIT;                                     -- 提交（两步都成功才持久化）
 
-| 问题 | 含义 |
-|------|------|
-| 脏读 | 读到未提交数据 |
-| 不可重复读 | 同事务内同一行两次读不同（被UPDATE） |
-| 幻读 | 同事务内两次查询行数不同（被INSERT） |
+-- 如果中间出错：
+ROLLBACK;                                   -- 回滚（撤销所有未提交的修改）
+```
 
-### 三、四种隔离级别
+**自动提交（autocommit）机制：**
+```sql
+SHOW VARIABLES LIKE 'autocommit';           -- 默认ON，每条SQL都是独立事务
+SET autocommit = 0;                          -- 关闭自动提交，需手动COMMIT
+```
 
-| 隔离级别 | 脏读 | 不可重复读 | 幻读 |
-|----------|------|-----------|------|
-| 读未提交 | ❌ | ❌ | ❌ |
-| 读已提交(RC) | ✅ | ❌ | ❌ |
-| 可重复读(RR)**默认** | ✅ | ✅ | ✅* |
-| 串行化 | ✅ | ✅ | ✅ |
+### 二、ACID 四大特性（面试必考）
 
-*MySQL在RR级别通过MVCC+间隙锁基本解决幻读。
+| 特性 | 含义 | 通俗理解 | InnoDB 实现方式 |
+|------|------|----------|-----------------|
+| **原子性(A)** | 事务中的操作要么全做，要么全不做 | 转账两步要么都成功要么都不发生 | **undo log**（回滚日志）：记录修改前的旧值，ROLLBACK时用它恢复 |
+| **一致性(C)** | 事务前后数据满足完整性约束 | 转账前后总金额不变 | 由 A+I+D 三个特性共同保证，是最终目的 |
+| **隔离性(I)** | 并发事务互不干扰 | A转B的同时C转D，互不影响 | **锁 + MVCC**：写操作用锁互斥，读操作用MVCC快照 |
+| **持久性(D)** | 已提交的数据永久保存 | COMMIT后断电也不丢数据 | **redo log**（重做日志）：WAL机制，先写日志再写磁盘，崩溃恢复用 |
 
-### 四、面试 Q&A
+> **面试一句话：** "A靠undo log回滚，C是目标靠AID保证，I靠锁和MVCC，D靠redo log的WAL机制——其中redo log是顺序写性能高，崩溃后用它重放已提交事务。"
 
-**ACID？** > 原子性(undo log)、一致性、隔离性(锁+MVCC)、持久性(redo log)。
-**脏读/不可重复读/幻读？** > 脏读读未提交、不可重复读内容变了、幻读行数变了。
+#### redo log 工作原理（WAL：Write-Ahead Logging）
+
+```
+客户端执行 UPDATE
+       ↓
+  ① 修改 Buffer Pool 中的数据页（内存）
+       ↓
+  ② 先写 redo log（顺序写，很快）→ 落盘
+       ↓
+  ③ 返回客户端"修改成功"
+       ↓
+  ④ 后台线程择时将脏页刷回磁盘（随机写，较慢）
+```
+
+**为什么 redo log 能保证持久性？** 即使步骤④还没完成就断电，重启时 MySQL 会读取 redo log 重放已提交的修改。
+
+#### undo log 工作原理
+
+```
+事务执行 UPDATE users SET age=30 WHERE id=1;（原 age=25）
+
+undo log 记录：{ id:1, age:25 }  ← 旧值
+
+ROLLBACK → 用 undo log 把 age 恢复为 25
+```
+
+### 三、并发事务的三个问题（面试高频）
+
+用一个银行账户表演示，初始余额 balance = 1000：
+
+#### 1. 脏读（Dirty Read）—— 读到别人还没提交的数据
+
+```
+时间线   事务A                              事务B
+  T1     BEGIN;
+  T2     UPDATE account SET balance=500      BEGIN;
+         WHERE id=1;  -- 改了但没提交
+  T3                                         SELECT balance FROM account
+                                             WHERE id=1;  → 结果：500（脏数据！）
+  T4     ROLLBACK;  -- A回滚了，余额恢复1000
+  T5                                         -- B拿着500去做了业务判断，全错了！
+```
+
+**本质：** B读到了A**未提交**的数据。如果A回滚，B读到的是不存在的脏数据。
+
+#### 2. 不可重复读（Non-Repeatable Read）—— 同一事务内两次读同一行结果不同
+
+```
+时间线   事务A                              事务B
+  T1     BEGIN;
+  T2     SELECT balance FROM account
+         WHERE id=1;  → 结果：1000
+  T3                                         BEGIN;
+                                             UPDATE account SET balance=800
+                                             WHERE id=1;
+                                             COMMIT;  -- B提交了
+  T4     SELECT balance FROM account
+         WHERE id=1;  → 结果：800  ← 两次读的不一样！
+```
+
+**本质：** 同一事务内，两次读取**同一行**，内容被别人的UPDATE/DELETE改了。
+
+#### 3. 幻读（Phantom Read）—— 两次查询结果的行数不同
+
+```
+时间线   事务A                              事务B
+  T1     BEGIN;
+  T2     SELECT * FROM account
+         WHERE age > 20;  → 结果：3行
+  T3                                         BEGIN;
+                                             INSERT INTO account VALUES(4,'D',25);
+                                             COMMIT;
+  T4     SELECT * FROM account
+         WHERE age > 20;  → 结果：4行  ← 多了一行"幻影"！
+```
+
+**本质：** 同一事务内，两次读取的**行数**不同，被别人的INSERT增加了行。
+
+| 问题 | 触发操作 | 影响 |
+|------|----------|------|
+| 脏读 | 读到未提交的数据 | 数据根本不存在，业务判断全部错误 |
+| 不可重复读 | UPDATE/DELETE | 同一行的值变了 |
+| 幻读 | INSERT | 结果集的行数变了 |
+
+### 四、四种隔离级别（面试必背）
+
+| 隔离级别 | 脏读 | 不可重复读 | 幻读 | 性能 | MySQL实现 |
+|----------|------|-----------|------|------|-----------|
+| 读未提交(Read Uncommitted) | ❌ 可能 | ❌ 可能 | ❌ 可能 | 最高 | 无特殊处理 |
+| 读已提交(Read Committed, RC) | ✅ 解决 | ❌ 可能 | ❌ 可能 | 高 | 每次SELECT生成新ReadView |
+| 可重复读(Repeatable Read, RR) **默认** | ✅ 解决 | ✅ 解决 | ✅ 基本解决 | 中 | 第一次SELECT生成ReadView后复用 + 间隙锁 |
+| 串行化(Serializable) | ✅ 解决 | ✅ 解决 | ✅ 完全解决 | 最低 | 所有操作加共享锁，完全串行 |
+
+**为什么 MySQL 默认用 RR？** 兼顾了安全性和性能。RR级别通过 MVCC 快照读 + 间隙锁防幻读，解决了大多数并发问题。
+
+```sql
+-- 查看当前隔离级别
+SELECT @@transaction_isolation;              -- 默认：REPEATABLE-READ
+
+-- 修改隔离级别
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+```
+
+### 五、事务的传播行为（Spring中常问）
+
+| 传播行为 | 含义 |
+|----------|------|
+| REQUIRED（默认） | 有事务就加入，没有就新建 |
+| REQUIRES_NEW | 总是新建事务，挂起当前事务 |
+| NESTED | 嵌套事务，外层回滚内层也回滚，内层回滚不影响外层 |
+| SUPPORTS | 有事务就加入，没有就以非事务运行 |
+| NOT_SUPPORTED | 总是以非事务运行，挂起当前事务 |
+
+### 六、面试高频问题
+
+**Q1：ACID分别靠什么实现？**
+> A靠undo log（记录旧值用于回滚），C是最终目标靠AID共同保证，I靠锁（写互斥）+MVCC（读快照），D靠redo log（WAL机制先写日志再写磁盘）。
+
+**Q2：脏读、不可重复读、幻读的区别？**
+> 脏读是读到未提交数据（数据无效），不可重复读是同一行被UPDATE导致两次读不同，幻读是被INSERT导致两次查询行数不同。严重程度递增。
+
+**Q3：为什么MySQL默认用RR不用RC？**
+> RR在安全和性能间取得平衡。RC每次SELECT都生成新ReadView开销大且不能防不可重复读，RR复用ReadView解决了不可重复读，配合间隙锁基本解决幻读。
+
+**Q4：redo log 和 undo log 的区别？**
+> redo log 记录"做了什么修改"用于崩溃恢复（保证持久性），undo log 记录"修改前的值"用于回滚（保证原子性）。redo log 是顺序写性能高，undo log 还用于MVCC版本链。
+
+**Q5：大事务有什么问题？怎么优化？**
+> 大事务持有锁时间长→并发度低，undo log积累多→占用空间，主从延迟增大。优化：拆分长事务、避免在事务中做RPC调用、用批量操作减少事务时间。
 
 ---
 
 ## 2.4 MVCC（多版本并发控制）
 
-### 一、三个核心组件
+### 一、MVCC 是什么？为什么需要它？
 
-1. **隐藏字段：** `DB_TRX_ID`(最后修改的事务ID) + `DB_ROLL_PTR`(指向undo log旧版本)
-2. **undo log版本链：** 每次UPDATE的旧版本通过ROLL_PTR串联
-3. **ReadView：** 记录当前活跃事务，判断版本可见性
+**MVCC（Multi-Version Concurrency Control）** 是一种不加锁就能实现并发读的机制——**读写互不阻塞**。
 
-### 二、可见性判断规则
+- **没有MVCC时：** 读操作要加共享锁，写操作要加排他锁，读写互相等待，并发性能差
+- **有了MVCC：** 读操作通过"快照"读历史版本，不跟写操作冲突；写操作之间仍然用锁互斥
 
-```text
-对每个版本的 DB_TRX_ID：
-① == creator_trx_id → 自己改的，可见
-② < min_trx_id → 修改时都已提交，可见
-③ >= max_trx_id → ReadView之后才开始的，不可见
-④ 在 m_ids 中 → 未提交，不可见；不在 → 已提交，可见
-不可见 → 沿ROLL_PTR找上一个版本继续判断
+**核心思想：** 给每行数据维护多个版本，读操作根据自己的"时间点"读取对应的版本。
+
+### 二、MVCC 的三大核心组件
+
+#### 1. 隐藏字段（每行数据自动带的）
+
+InnoDB 为每行数据自动添加三个隐藏字段：
+
+| 隐藏字段 | 大小 | 含义 |
+|----------|------|------|
+| `DB_TRX_ID` | 6字节 | 最后修改（INSERT/UPDATE）该行的事务ID |
+| `DB_ROLL_PTR` | 7字节 | 回滚指针，指向 undo log 中该行的上一个版本 |
+| `DB_ROW_ID` | 6字节 | 隐藏自增ID（没有主键时自动生成，有主键则没有） |
+
+```
+  ┌─────────────────────────────────┐
+  │         一行数据的实际结构        │
+  ├─────────────────────────────────┤
+  │ DB_TRX_ID = 103  (谁最后改了我)  │
+  │ DB_ROLL_PTR = 0x7F2A (指向上一个版本) │
+  │ DB_ROW_ID = 1                    │
+  │ name = '张三'                    │
+  │ age = 30                         │
+  └─────────────────────────────────┘
 ```
 
-### 三、RC vs RR 区别（面试必问）
+#### 2. undo log 版本链
 
-|  | RC | RR |
-|--|-----|-----|
-| ReadView | 每次SELECT生成新的 | 第一次SELECT生成，后续复用 |
-| 效果 | 能看到最新提交数据 | 同事务内读取一致 |
+每次 UPDATE 操作时，旧值不会直接覆盖，而是存入 undo log，通过 ROLL_PTR 串联成一个链表：
 
-> "RC每次SELECT生成新ReadView，RR只在第一次生成并复用——这就是RR能防止不可重复读的根本原因。"
+```
+当前行数据          undo log版本链
+┌──────────┐
+│ TRX_ID=103│
+│ ROLL_PTR ─┼──→ ┌──────────┐     ┌──────────┐
+│ name='张三'│    │ TRX_ID=101│     │ TRX_ID=100│
+│ age=30    │    │ ROLL_PTR ─┼──→  │ ROLL_PTR ─┼──→ NULL (原始INSERT版本)
+└──────────┘     │ name='张三'│     │ name='张三'│
+                 │ age=28    │     │ age=25    │
+                 └──────────┘     └──────────┘
+                 
+  最新版本(age=30)  上一版本(age=28)  最初版本(age=25)
+```
+
+**用途：** 当某个事务需要看历史版本时，就沿着 ROLL_PTR 链往前找，直到找到可见的版本。
+
+#### 3. ReadView（读视图）
+
+ReadView 是事务在进行**快照读（普通SELECT）**时生成的一个"快照"，记录了"当前有哪些事务正在活跃"。
+
+| ReadView 字段 | 含义 |
+|---------------|------|
+| `m_ids` | 生成 ReadView 时，所有**活跃（未提交）**事务的ID列表 |
+| `min_trx_id` | m_ids 中最小的事务ID |
+| `max_trx_id` | 下一个将要分配的事务ID（即当前最大事务ID + 1） |
+| `creator_trx_id` | 创建该 ReadView 的事务自身的ID |
+
+### 三、可见性判断规则（面试手画流程图）
+
+当事务执行 SELECT 时，对每行数据沿着版本链从新到旧判断：
+
+```
+                    取出当前版本的 DB_TRX_ID
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+      DB_TRX_ID == creator_trx_id ?    不等
+      (是自己改的吗？)                    │
+          │ 是                    ┌──────┴──────┐
+          ↓                      │              │
+       ✅ 可见            DB_TRX_ID <        DB_TRX_ID >=
+                          min_trx_id ?        max_trx_id ?
+                          (修改时所有事务      (ReadView之后
+                           都已提交？)          才开始的？)
+                           │ 是       │否       │是        │否
+                           ↓         │         ↓         │
+                        ✅ 可见      │      ❌ 不可见    │
+                                    │                    │
+                              在 m_ids 中？             │
+                              (修改事务还活着吗？)        │
+                               │ 是       │否            │
+                               ↓         ↓              │
+                            ❌ 不可见  ✅ 可见           │
+                                                    沿 ROLL_PTR
+                                                    找上一个版本
+                                                    重新判断 ──→
+```
+
+**口诀：** 自己改的可见 → 比最小的还老可见 → 比最大的还新不可见 → 在活跃列表里不可见不在就可见 → 不可见就沿链往前找。
+
+### 四、完整实例演示
+
+假设有事务ID为 100、101、102、103、104：
+
+```
+初始数据：id=1, name='张三', age=25, TRX_ID=100
+
+时间线：
+T1: 事务102 UPDATE age=28   → undo链: [100(age=25)]
+T2: 事务102 COMMIT
+T3: 事务103 UPDATE age=30   → undo链: [102(age=28)] → [100(age=25)]
+T4: 事务103 未提交（活跃中）
+T5: 事务101 未提交（活跃中）
+
+此时事务104执行 SELECT：
+  ReadView = { m_ids=[101,103], min_trx_id=101, max_trx_id=105, creator_trx_id=104 }
+  
+  检查当前行 TRX_ID=103：
+    103 ≠ 104（不是自己改的）
+    103 ≥ 101（不满足 < min_trx_id）
+    103 < 105（不满足 ≥ max_trx_id）
+    103 在 m_ids=[101,103] 中 → ❌ 不可见（事务103还没提交）
+    
+  沿 ROLL_PTR 找到 TRX_ID=102, age=28：
+    102 ≠ 104
+    102 ≥ 101（不满足 < min_trx_id）
+    102 < 105
+    102 不在 m_ids=[101,103] 中 → ✅ 可见！（事务102已提交）
+    
+  结果：事务104 读到 age=28 ✅
+```
+
+### 五、RC vs RR 区别（面试必问，核心考点）
+
+|  | RC（读已提交） | RR（可重复读） |
+|--|----------------|----------------|
+| ReadView 生成时机 | **每次 SELECT** 都生成新的 | **第一次 SELECT** 生成，后续复用 |
+| 效果 | 每次读都能看到最新已提交数据 | 同事务内多次读结果一致 |
+| 能否防止不可重复读 | ❌ 不能 | ✅ 能 |
+
+**为什么RC不能防止不可重复读？**
+
+```
+时间线   事务A(RC)                           事务B
+  T1     SELECT ... → 生成ReadView_1
+         (此时 m_ids=[B], 看到age=28)
+  T2                                         UPDATE age=30; COMMIT;
+  T3     SELECT ... → 生成ReadView_2 ← 新的！
+         (此时 m_ids=[], TRX_ID=103不在活跃列表)
+         → 读到 age=30 ← 两次读的结果不同！
+```
+
+**为什么RR能防止不可重复读？**
+
+```
+时间线   事务A(RR)                           事务B
+  T1     SELECT ... → 生成ReadView_1（复用）
+         (此时 m_ids=[B], 看到age=28)
+  T2                                         UPDATE age=30; COMMIT;
+  T3     SELECT ... → 复用ReadView_1 ← 还是同一个！
+         (TRX_ID=103在旧的m_ids中 → 不可见)
+         → 沿链找到 TRX_ID=102 → 不在m_ids → age=28 ← 一致！
+```
+
+> **面试一句话：** "RC每次SELECT生成新ReadView所以能看到最新提交导致不可重复读，RR复用第一次的ReadView所以同事务内读到的始终一致——这就是RR防止不可重复读的根本原因。"
+
+### 六、快照读 vs 当前读
+
+|  | 快照读 | 当前读 |
+|--|--------|--------|
+| 操作 | 普通 SELECT | SELECT ... FOR UPDATE / LOCK IN SHARE MODE / INSERT / UPDATE / DELETE |
+| 读到的是 | 历史快照版本（MVCC） | 最新已提交数据（加锁） |
+| 是否加锁 | 不加锁 | 加行锁/间隙锁 |
+
+> **注意：** MVCC 只对快照读（普通SELECT）生效。UPDATE、DELETE、FOR UPDATE 等操作都是当前读，直接读最新数据并加锁。
+
+### 七、面试高频问题
+
+**Q1：MVCC的实现原理？**
+> 三个组件：隐藏字段（TRX_ID+ROLL_PTR）记录版本信息，undo log版本链保存历史数据，ReadView判断版本可见性。SELECT时沿版本链按可见性规则找到第一个可见版本。
+
+**Q2：RC和RR的ReadView有什么区别？**
+> RC每次SELECT都创建新ReadView，能看到其他事务最新提交的数据；RR只在第一次SELECT创建ReadView并复用，保证同事务内多次读取结果一致。
+
+**Q3：MVCC能完全解决幻读吗？**
+> 快照读能通过MVCC解决，但当前读（FOR UPDATE等）需要间隙锁配合。InnoDB在RR级别默认使用临键锁（Next-Key Lock）防止幻读。
 
 ---
 
 ## 2.5 MySQL 锁
 
-### 一、行锁的三种形态
+### 一、锁的分类全景
 
-| 锁类型 | 锁什么 | 防止什么 |
-|--------|--------|----------|
-| 记录锁(Record Lock) | 锁单行 | 防修改/删除 |
-| 间隙锁(Gap Lock) | 锁两行之间的间隙 | 防INSERT |
-| 临键锁(Next-Key Lock)**默认** | 行 + 前面的间隙 | 防修改 + 防插入（防幻读） |
+```
+                        MySQL 锁的分类
+                           │
+          ┌────────────────┼────────────────┐
+          ↓                ↓                ↓
+      按粒度分          按模式分          按算法分
+     ┌──────┐        ┌──────┐        ┌──────┐
+     │全局锁 │        │共享锁 │        │记录锁 │
+     │表级锁 │        │排他锁 │        │间隙锁 │
+     │行级锁 │        │意向锁 │        │临键锁 │
+     └──────┘        └──────┘        └──────┘
+```
 
-### 二、共享锁 vs 排他锁
+#### 1. 全局锁
 
-|  | 共享锁(S/读锁) | 排他锁(X/写锁) |
-|--|----------------|----------------|
-| SQL | `LOCK IN SHARE MODE` | `FOR UPDATE` |
-| 读 | 允许其他S锁 | 阻塞 |
-| 写 | 阻塞 | 阻塞 |
+```sql
+FLUSH TABLES WITH READ LOCK;    -- 整个数据库只读
+-- 用于：全库逻辑备份（mysqldump --single-transaction更好）
+UNLOCK TABLES;
+```
 
-### 三、面试 Q&A
+**缺点：** 整个库只读，业务完全阻塞。生产环境一般不用。
 
-**InnoDB有哪些行锁？** > 记录锁、间隙锁、临键锁（默认=前两者之和）。
-**怎么防幻读？** > 临键锁锁行+间隙防INSERT，MVCC保证读一致性。
+#### 2. 表级锁
+
+| 锁类型 | 加锁方式 | 特点 |
+|--------|----------|------|
+| 表锁 | `LOCK TABLES t READ/WRITE` | 粒度大，并发低 |
+| 元数据锁(MDL) | 自动加（执行SQL时） | 防止DML与DDL冲突 |
+| 意向锁(IS/IX) | 自动加（InnoDB） | 快速判断表里是否有行锁 |
+
+**意向锁的作用（面试常问）：**
+
+```
+事务A: SELECT * FROM t WHERE id=1 FOR UPDATE;  → 给id=1加行级X锁，同时给表t加意向锁IX
+事务B: LOCK TABLES t WRITE;                     → 要加表级X锁
+
+没有意向锁时：B要遍历每一行看有没有行锁 → 太慢！
+有意向锁时：B只看表上有没有IX/IS锁 → 快速判断！
+```
+
+**MDL（元数据锁）的场景：**
+
+```
+事务A: BEGIN; SELECT * FROM t;  → 自动加MDL读锁（防止DDL修改表结构）
+事务B: ALTER TABLE t ADD COLUMN c INT;  → 等待MDL锁释放（被A阻塞）
+-- 如果A一直不提交，B就一直等，后续所有对t的查询都会被B阻塞！→ 连锁阻塞
+```
+
+#### 3. 行级锁（InnoDB独有，面试重点）
+
+**InnoDB行锁的三种形态：**
+
+| 锁类型 | 锁什么 | 防止什么 | 加锁条件 |
+|--------|--------|----------|----------|
+| 记录锁(Record Lock) | 锁住**单行**索引记录 | 防止对该行的 UPDATE/DELETE | 精确匹配唯一索引 |
+| 间隙锁(Gap Lock) | 锁住两行之间的**间隙**（开区间） | 防止 INSERT（别人插不进来） | 范围查询、非唯一索引 |
+| 临键锁(Next-Key Lock) **默认** | 记录锁 + 前面的间隙锁（左开右闭） | 同时防修改和防插入 → **防幻读** | InnoDB默认行锁算法 |
+
+**图解三种行锁的关系：**
+
+```
+假设表中有 id=5, id=10, id=15 三行数据
+
+索引排列：  (-∞, 5)  [5]  (5, 10)  [10]  (10, 15)  [15]  (15, +∞)
+
+记录锁：          [5]       [10]         [15]          ← 只锁行本身
+间隙锁：  (-∞,5)    (5,10)     (10,15)     (15,+∞)    ← 只锁间隙
+临键锁：  (-∞,5]    (5,10]     (10,15]     (15,+∞]    ← 间隙 + 行（左开右闭）
+```
+
+### 二、InnoDB 加锁规则（重要！）
+
+InnoDB 的行锁是**加在索引上的**，不是加在数据行上的：
+
+```sql
+-- 情况1：通过索引精确匹配 → 加记录锁
+SELECT * FROM users WHERE id = 1 FOR UPDATE;  -- id是主键 → 只锁id=1这一行
+
+-- 情况2：通过非唯一索引匹配 → 加临键锁
+SELECT * FROM users WHERE name = '张三' FOR UPDATE;  -- name是普通索引
+-- 锁住 name索引的间隙 + 行，同时锁住对应的主键索引行
+
+-- 情况3：不走索引（全表扫描）→ 锁所有行！
+SELECT * FROM users WHERE age = 25 FOR UPDATE;  -- age没有索引
+-- 表中每一行都被锁住！严重影响并发
+```
+
+> **面试一句话：** "InnoDB的行锁是加在索引上的。如果没有用到索引，行锁会退化为表锁——所以一定要确保UPDATE/DELETE走了索引。"
+
+### 三、共享锁 vs 排他锁
+
+|  | 共享锁(S锁/读锁) | 排他锁(X锁/写锁) |
+|--|-----------------|-----------------|
+| 加锁SQL | `SELECT ... LOCK IN SHARE MODE` | `SELECT ... FOR UPDATE` |
+| 读操作 | 允许其他事务加S锁（可并行读） | 阻塞其他S锁和X锁 |
+| 写操作 | 阻塞其他事务的X锁 | 阻塞其他S锁和X锁 |
+| 兼容性 | S和S兼容，S和X互斥 | X和任何锁都互斥 |
+
+```sql
+-- 共享锁示例
+SELECT * FROM users WHERE id = 1 LOCK IN SHARE MODE;  -- 加S锁
+-- 其他事务可以继续读（加S锁），但不能修改（被X锁阻塞）
+
+-- 排他锁示例
+SELECT * FROM users WHERE id = 1 FOR UPDATE;           -- 加X锁
+-- 其他事务既不能加S锁也不能加X锁，必须等释放
+```
+
+### 四、死锁（面试高频）
+
+#### 死锁是怎么发生的？
+
+```
+时间线   事务A                              事务B
+  T1     UPDATE users SET age=30
+         WHERE id=1;  → 获得id=1的X锁
+  T2                                         UPDATE users SET age=28
+                                             WHERE id=2;  → 获得id=2的X锁
+  T3     UPDATE users SET age=28
+         WHERE id=2;  → 等待B释放id=2的锁...
+  T4                                         UPDATE users SET age=30
+                                             WHERE id=1;  → 等待A释放id=1的锁...
+                                             
+  💀 A等B，B等A → 死锁！
+```
+
+#### 死锁的四个必要条件
+
+| 条件 | 含义 | 破坏方式 |
+|------|------|----------|
+| 互斥 | 资源同时只能被一个事务持有 | 无法破坏（锁的本质） |
+| 持有并等待 | 持有资源的同时等待其他资源 | 一次性获取所有锁 |
+| 不可剥夺 | 已持有的锁不能被强制释放 | 设置锁超时（innodb_lock_wait_timeout） |
+| 循环等待 | A等B，B等A | 按固定顺序加锁 |
+
+#### InnoDB 死锁检测与处理
+
+```sql
+-- 查看锁等待超时时间（默认50秒）
+SHOW VARIABLES LIKE 'innodb_lock_wait_timeout';
+
+-- 查看死锁日志
+SHOW ENGINE INNODB STATUS;
+```
+
+**InnoDB 自动死锁检测：** 当检测到死锁时，会自动回滚持有锁最少的那一个事务（代价最小的），让另一个事务继续执行。
+
+#### 如何避免死锁？
+
+1. **按固定顺序访问表和行**（最重要）：总是先操作id小的再操作id大的
+2. **保持事务简短**：减少持锁时间
+3. **合理使用索引**：避免锁升级为表锁
+4. **降低隔离级别**：RC比RR锁的范围小（RC没有间隙锁）
+
+### 五、锁和 MVCC 配合防幻读的完整机制
+
+```
+RR级别下防幻读的完整策略：
+
+快照读（普通SELECT）：
+  → MVCC 通过 ReadView 读历史快照 → 天然防幻读
+
+当前读（FOR UPDATE / INSERT / UPDATE / DELETE）：
+  → 临键锁（Next-Key Lock）锁住行+间隙
+  → 别人INSERT不进来 → 防幻读
+```
+
+### 六、面试高频问题
+
+**Q1：InnoDB有哪些行锁？**
+> 三种：记录锁（锁单行）、间隙锁（锁间隙防INSERT）、临键锁（前两者之和，默认算法）。临键锁在RR级别下配合MVCC防止幻读。
+
+**Q2：InnoDB的行锁是锁什么的？**
+> 行锁是加在**索引**上的，不是加在数据行上。如果SQL没有走索引，行锁会退化为锁住所有行（效果等于表锁）。
+
+**Q3：什么是意向锁？有什么用？**
+> 意向锁是表级锁，在加行锁之前自动加。作用是让判断"表里有没有行锁"变快——不用遍历每行，只需看表上有没有意向锁。
+
+**Q4：怎么避免死锁？**
+> 1.按固定顺序操作行 2.保持事务简短 3.确保SQL走索引 4.设置合理的锁超时时间。InnoDB会自动检测死锁并回滚代价最小的事务。
+
+**Q5：RR级别怎么防幻读的？**
+> 快照读通过MVCC读历史版本防幻读，当前读通过临键锁（记录锁+间隙锁）阻止其他事务INSERT到间隙中，两种机制配合实现。
 
 ---
 
 ## 2.6 SQL 优化
 
-### 一、EXPLAIN 关键字段
+### 一、慢查询分析：EXPLAIN 执行计划
 
-| 字段 | 含义 | 理想值 |
-|------|------|--------|
-| type | 访问类型 | ref/range（避免ALL） |
-| key | 使用的索引 | 不为NULL |
-| rows | 扫描行数 | 越少越好 |
-| Extra | 额外信息 | Using index（覆盖索引） |
+EXPLAIN 是 SQL 优化的第一步——先看 MySQL 是怎么执行这条 SQL 的。
 
-**type排序：** system > const > eq_ref > ref > range > index > ALL
+```sql
+EXPLAIN SELECT * FROM users WHERE age > 20 ORDER BY name;
+```
 
-### 二、优化策略
+| 字段 | 含义 | 理想值 | 说明 |
+|------|------|--------|------|
+| **id** | 执行序号 | 从大到小执行 | 子查询会有多个id，越大越先执行 |
+| **select_type** | 查询类型 | SIMPLE | SIMPLE(简单查询)、PRIMARY(主查询)、SUBQUERY(子查询) |
+| **table** | 访问哪张表 | - | 显示正在访问的表名 |
+| **type** | 访问类型（最重要） | ref/range | 从好到差：system > const > eq_ref > ref > range > index > **ALL** |
+| **possible_keys** | 可能用到的索引 | 不为NULL | 显示有哪些候选索引 |
+| **key** | 实际用了哪个索引 | 不为NULL | NULL说明没走索引！ |
+| **key_len** | 索引使用的字节数 | 越短越好 | 判断复合索引用了几个字段 |
+| **ref** | 索引查找的参考 | const/字段名 | 与索引比较的列或常量 |
+| **rows** | 预估扫描行数 | 越少越好 | 100万行里扫100行 vs 扫100万行 |
+| **Extra** | 额外信息 | Using index | 见下方详细说明 |
 
-1. **避免索引失效：** 不在索引列上用函数/运算
-2. **避免SELECT ***：** 用覆盖索引
-3. **深分页优化：** `WHERE id > 上次最大值 LIMIT n` 代替 `OFFSET`
-4. **小表驱动大表：** 小结果集驱动大表查询
-5. **EXISTS替代IN：** 子查询结果集大时用EXISTS
+#### type 字段排序（从优到差）
 
-### 三、面试 Q&A
+| type | 含义 | 示例 |
+|------|------|------|
+| **system** | 表中只有一行 | 几乎不会遇到 |
+| **const** | 通过主键/唯一索引精确匹配一行 | `WHERE id = 1` |
+| **eq_ref** | JOIN时被驱动表通过主键/唯一索引匹配 | `JOIN ... ON t1.id = t2.id` |
+| **ref** | 通过普通索引匹配（可能多行） | `WHERE name = '张三'`（name有索引） |
+| **range** | 索引范围扫描 | `WHERE age BETWEEN 20 AND 30` |
+| **index** | 全索引扫描（遍历整棵B+树） | `SELECT id FROM users`（id是主键） |
+| **ALL** | **全表扫描**（最差！） | `WHERE age = 25`（age无索引） |
 
-**怎么分析慢查询？** > EXPLAIN看type/key/Extra，定位后加索引或改写SQL。
-**什么是覆盖索引？** > 查询字段都在索引中不回表，Extra显示Using index。
-**深分页怎么优化？** > 游标分页 `WHERE id > ? LIMIT n`。
+> **面试一句话：** "type从好到差是 system > const > eq_ref > ref > range > index > ALL。至少要达到ref级别，ALL说明没走索引必须优化。"
+
+#### Extra 字段关键值
+
+| Extra 值 | 含义 | 好坏 |
+|----------|------|------|
+| **Using index** | 覆盖索引，不需要回表 | ✅ 非常好 |
+| Using where | Server层过滤（存储引擎返回多余数据） | 一般 |
+| Using index condition | 索引下推（ICP），在存储引擎层过滤 | ✅ 较好 |
+| **Using filesort** | 需要额外排序（没走索引排序） | ❌ 需优化 |
+| **Using temporary** | 使用了临时表（GROUP BY没走索引） | ❌ 需优化 |
+| Using join buffer | JOIN没有索引用了缓存 | ❌ 需优化 |
+
+### 二、索引失效的常见场景（面试高频）
+
+#### 1. 对索引列使用函数或运算
+
+```sql
+-- ❌ 索引失效：在索引列上使用了函数
+SELECT * FROM users WHERE YEAR(created_at) = 2024;
+SELECT * FROM users WHERE LEFT(name, 1) = '张';
+
+-- ✅ 索引有效：改写为范围查询
+SELECT * FROM users WHERE created_at >= '2024-01-01' AND created_at < '2025-01-01';
+SELECT * FROM users WHERE name LIKE '张%';
+```
+
+#### 2. 隐式类型转换
+
+```sql
+-- 假设 phone 是 VARCHAR 类型
+-- ❌ 索引失效：字符串列与数字比较，MySQL会把字符串转数字
+SELECT * FROM users WHERE phone = 13800138000;
+
+-- ✅ 索引有效：用字符串比较
+SELECT * FROM users WHERE phone = '13800138000';
+```
+
+#### 3. 最左前缀原则（复合索引）
+
+```sql
+-- 假设有复合索引 idx_abc(a, b, c)
+
+-- ✅ 走索引
+WHERE a = 1;
+WHERE a = 1 AND b = 2;
+WHERE a = 1 AND b = 2 AND c = 3;
+
+-- ❌ 不走索引（跳过了最左列a）
+WHERE b = 2;
+WHERE c = 3;
+WHERE b = 2 AND c = 3;
+
+-- ⚠️ 部分走索引（只用了a列）
+WHERE a = 1 AND c = 3;  -- 只走a的索引，c无法利用索引
+
+-- ✅ 范围查询后的列失效
+WHERE a > 1 AND b = 2;  -- 只走a的索引（a是范围查询后b无法用索引）
+```
+
+> **面试一句话：** "复合索引遵循最左前缀原则，查询条件必须从索引最左列开始连续匹配。遇到范围查询（>、<、BETWEEN、LIKE）后，右边的列无法使用索引。"
+
+#### 4. LIKE 以通配符开头
+
+```sql
+-- ❌ 索引失效：%开头无法走B+树索引
+SELECT * FROM users WHERE name LIKE '%张%';
+SELECT * FROM users WHERE name LIKE '%张';
+
+-- ✅ 索引有效：前缀匹配可以用索引
+SELECT * FROM users WHERE name LIKE '张%';
+```
+
+#### 5. OR 条件中有一个列没有索引
+
+```sql
+-- 假设 name 有索引，age 没有索引
+-- ❌ 索引失效：OR连接时只要有一个条件没索引，整个就不走索引
+SELECT * FROM users WHERE name = '张三' OR age = 25;
+
+-- ✅ 索引有效：两个条件都有索引时OR可以走索引
+-- 或者用UNION ALL拆分
+SELECT * FROM users WHERE name = '张三'
+UNION ALL
+SELECT * FROM users WHERE age = 25;
+```
+
+#### 6. NOT IN、NOT EXISTS、!= （通常不走索引）
+
+```sql
+-- ❌ 通常不走索引
+SELECT * FROM users WHERE age != 25;
+SELECT * FROM users WHERE age NOT IN (20, 25, 30);
+
+-- ✅ 改写为正向查询
+SELECT * FROM users WHERE age > 25 OR age < 25;  -- 范围查询走索引
+```
+
+### 三、覆盖索引（面试必问）
+
+**什么是覆盖索引？** 查询的所有字段都在索引中，不需要回表查主键索引。
+
+```sql
+-- 假设有复合索引 idx_name_age(name, age)
+
+-- ✅ 覆盖索引：只需要name和age，都在索引中
+SELECT name, age FROM users WHERE name = '张三';
+-- Extra: Using index ← 表示覆盖索引
+
+-- ❌ 非覆盖索引：还需要email，索引中没有，必须回表
+SELECT name, age, email FROM users WHERE name = '张三';
+-- Extra: NULL ← 需要回表查询
+```
+
+**图解回表 vs 覆盖索引：**
+
+```
+普通查询（需要回表）：
+  二级索引树 → 找到主键ID → 回主键索引树 → 取出完整行数据
+  （查了两棵树）
+
+覆盖索引（不需要回表）：
+  二级索引树 → 直接在索引中取到所有需要的字段 → 返回
+  （只查了一棵树，快！）
+```
+
+> **面试一句话：** "覆盖索引是指查询的所有字段都在索引中，不需要回表。EXPLAIN中Extra显示Using index就是覆盖索引。优化时优先用覆盖索引减少IO。"
+
+### 四、深分页优化
+
+#### 问题：传统 LIMIT OFFSET 性能差
+
+```sql
+-- 查第100万页的数据（每页10条）
+SELECT * FROM users ORDER BY id LIMIT 10 OFFSET 1000000;
+-- MySQL需要扫描1000010行，然后丢弃前100万行 → 极慢！
+```
+
+#### 优化方案1：游标分页（推荐）
+
+```sql
+-- 第一页
+SELECT * FROM users WHERE id > 0 ORDER BY id LIMIT 10;  -- 取到id最大值=10
+
+-- 第二页（用上一页最后一个id）
+SELECT * FROM users WHERE id > 10 ORDER BY id LIMIT 10;  -- 取到id最大值=20
+
+-- 第三页
+SELECT * FROM users WHERE id > 20 ORDER BY id LIMIT 10;
+```
+
+**原理：** 每次直接定位到起始位置，不需要跳过前面的行。适合"上一页/下一页"的场景，不支持跳页。
+
+#### 优化方案2：子查询延迟关联
+
+```sql
+-- ❌ 原始写法：慢
+SELECT * FROM users ORDER BY id LIMIT 10 OFFSET 1000000;
+
+-- ✅ 优化写法：先用子查询在索引上定位id，再回表
+SELECT * FROM users
+INNER JOIN (
+    SELECT id FROM users ORDER BY id LIMIT 10 OFFSET 1000000
+) AS tmp ON users.id = tmp.id;
+```
+
+**原理：** 子查询只查id（走覆盖索引，不回表），快速定位10个id，再精确回表取10行数据。
+
+#### 优化方案3：业务层优化
+
+```sql
+-- 限制最大翻页数
+-- 比如只允许看前100页，超过则提示"请使用搜索缩小范围"
+SELECT * FROM users ORDER BY id LIMIT 10 OFFSET 990;  -- 最多到第100页
+```
+
+### 五、其他优化策略
+
+| 优化方向 | 做法 | 原因 |
+|----------|------|------|
+| 避免 SELECT * | 只查需要的字段 | 减少数据传输量，可能利用覆盖索引 |
+| 小表驱动大表 | 小结果集做外表 | 减少循环次数 |
+| EXISTS 替代 IN | 子查询结果集大时用EXISTS | EXISTS一旦匹配就返回，IN要全部计算 |
+| 批量代替循环 | 用批量INSERT代替循环单条INSERT | 减少事务次数和网络往返 |
+| 合理使用索引 | 在区分度高的列上建索引 | 性别这种只有2个值的列建索引没意义 |
+| 分库分表 | 单表超500万行时考虑 | 减少单表数据量 |
+
+```sql
+-- 小表驱动大表示例
+-- ❌ 大IN：先查出10万个id再去users表查
+SELECT * FROM users WHERE id IN (SELECT user_id FROM orders WHERE status = 'paid');
+-- orders有100万行匹配
+
+-- ✅ EXISTS：users表小，用EXISTS让MySQL优化
+SELECT * FROM users WHERE EXISTS (
+    SELECT 1 FROM orders WHERE orders.user_id = users.id AND orders.status = 'paid'
+);
+```
+
+### 六、索引下推（Index Condition Pushdown, ICP）
+
+MySQL 5.6+ 的优化，在**存储引擎层**就过滤掉不满足条件的数据，减少回表次数。
+
+```sql
+-- 假设有复合索引 idx_name_age(name, age)
+
+-- 没有ICP时：
+-- 存储引擎：根据name='张'找到所有行 → 全部返回给Server层
+-- Server层：再过滤age > 20
+-- 回表次数：所有name LIKE '张%'的行都要回表
+
+-- 有ICP时：
+-- 存储引擎：根据name='张'找到行，同时在本层检查age > 20 → 只返回满足条件的
+-- Server层：直接得到结果
+-- 回表次数：只对满足age > 20的行回表 → 大幅减少！
+```
+
+> **面试一句话：** "索引下推ICP是MySQL 5.6的优化，在存储引擎层利用索引字段提前过滤，减少回表次数。EXPLAIN中Extra显示Using index condition。"
+
+### 七、面试高频问题
+
+**Q1：怎么分析一条慢SQL？**
+> 先用EXPLAIN看执行计划：重点看type（访问类型）、key（是否走索引）、rows（扫描行数）、Extra（额外信息）。type是ALL就说明全表扫描要加索引，Extra有Using filesort/Using temporary需要优化ORDER BY和GROUP BY。
+
+**Q2：什么情况下索引会失效？**
+> 六种常见情况：①索引列用函数/运算 ②隐式类型转换 ③违反最左前缀原则 ④LIKE以%开头 ⑤OR中有无索引列 ⑥NOT IN/!=等否定条件。
+
+**Q3：什么是覆盖索引？**
+> 查询的所有字段都在索引中，不需要回表查主键索引。EXPLAIN的Extra显示Using index。覆盖索引减少了IO次数，是SQL优化的重要手段。
+
+**Q4：深分页怎么优化？**
+> 三种方案：①游标分页 WHERE id > 上次最大值 LIMIT n（推荐，但不支持跳页）②子查询延迟关联，先在索引上定位id再回表 ③业务层限制最大翻页数。
+
+**Q5：复合索引的最左前缀原则？**
+> 复合索引(a,b,c)相当于创建了a、(a,b)、(a,b,c)三个索引。查询条件必须从最左列开始连续匹配，遇到范围查询后右边的列无法使用索引。
 
 ---
 
 # 模块六：测试技术
 
+> 简历项目二「智测星图」涉及的核心技术栈：pytest + requests + YAML + Allure + Jenkins
+> 对应项目实战：API自动化测试框架，包含单接口测试和业务场景测试
+
+## 6.1 pytest 测试框架
+
+### 一、pytest 是什么？
+
+pytest 是 Python 最流行的测试框架，相比 unittest：
+- 语法更简洁（不需要写类，普通函数就行）
+- 自动发现测试（文件以test_开头，函数以test_开头）
+- 强大的 fixture 机制（替代 setup/teardown）
+- 丰富的插件生态（allure、xdist并行等）
+
+```bash
+# 安装
+pip install pytest pytest-html pytest-xdist pytest-ordering pytest-rerunfailures
+
+# 运行
+pytest                          # 运行所有test_开头的文件
+pytest test_login.py            # 运行指定文件
+pytest -v                       # 详细输出
+pytest -s                       # 显示print输出
+pytest -k "login"               # 只运行名字包含login的用例
+pytest -x                       # 遇到失败就停止
+pytest --reruns 3               # 失败重跑3次
+pytest -n 4                     # 4个进程并行执行
+```
+
+### 二、pytest 配置文件 pytest.ini
+
+```ini
+[pytest]
+# 指定测试文件的命名规则
+python_files = test_*.py
+# 指定测试类的命名规则
+python_classes = Test*
+# 指定测试函数的命名规则
+python_functions = test*
+
+# 添加命令行参数（每次运行自动带上）
+addopts = -v -s --alluredir=./report/temp --clean-alluredir
+
+# 忽略警告
+filterwarnings =
+    ignore::DeprecationWarning
+    ignore::UserWarning
+```
+
+> **面试一句话：** "pytest通过pytest.ini配置文件统一管理测试规则，python_files/classes/functions控制测试发现规则，addopts指定默认运行参数。"
+
+### 三、fixture 机制（pytest核心，面试必问）
+
+fixture 是 pytest 的**依赖注入**机制——在测试前准备数据、测试后清理数据。
+
+#### 1. 基本用法
+
+```python
+import pytest
+
+# 定义fixture
+@pytest.fixture
+def sample_data():
+    data = {"name": "张三", "age": 25}
+    yield data                    # yield之前=setup，yield之后=teardown
+    print("清理数据")              # 测试完成后执行
+
+# 使用fixture（通过函数名注入）
+def test_user_info(sample_data):  # 参数名=fixture函数名
+    assert sample_data["name"] == "张三"
+    assert sample_data["age"] == 25
+```
+
+#### 2. fixture 的作用域（scope）
+
+| scope | 生命周期 | 执行时机 |
+|-------|----------|----------|
+| `function`（默认） | 每个测试函数 | 每个测试前后各一次 |
+| `class` | 每个测试类 | 类中所有测试前后各一次 |
+| `module` | 每个.py文件 | 文件中所有测试前后各一次 |
+| `session` | 整个测试会话 | 所有测试前后各一次 |
+
+```python
+# session级别：整个测试会话只执行一次（比如登录获取token）
+@pytest.fixture(scope="session")
+def login_token():
+    response = requests.post("/api/login", json={"user": "admin", "pwd": "123"})
+    token = response.json()["token"]
+    yield token              # 所有测试共享这个token
+    # teardown: 可以在这里做登出操作
+
+# function级别：每个测试函数都执行
+@pytest.fixture(scope="function")
+def clean_database():
+    # setup: 清空测试数据
+    db.execute("DELETE FROM test_table")
+    yield
+    # teardown: 测试后清理
+    db.execute("DELETE FROM test_table")
+```
+
+#### 3. autouse 自动使用
+
+```python
+@pytest.fixture(autouse=True)
+def start_test_and_end():
+    """每个测试自动执行，不需要手动传参"""
+    print("=== 测试开始 ===")        # setup
+    yield
+    print("=== 测试结束 ===")        # teardown
+```
+
+#### 4. conftest.py —— fixture的共享文件
+
+```
+project/
+├── conftest.py          ← 全局fixture（所有目录共享）
+├── testcase/
+│   ├── conftest.py      ← testcase目录下的fixture（该目录下共享）
+│   ├── test_login.py
+│   └── test_order.py
+```
+
+```python
+# conftest.py（全局）
+import pytest
+import yaml
+
+@pytest.fixture(scope="session", autouse=True)
+def clear_extract():
+    """测试会话开始时清空数据提取文件"""
+    with open("extract.yaml", "w") as f:
+        yaml.dump({}, f)
+    yield                           # 所有测试执行
+    print("所有测试完成")
+
+@pytest.fixture(scope="session", autouse=True)
+def system_login():
+    """自动登录——在所有测试之前获取token"""
+    # 发送登录请求
+    response = requests.post("/api/login", json={...})
+    token = response.json()["data"]["token"]
+    # 存入extract.yaml供后续测试使用
+    with open("extract.yaml", "a") as f:
+        yaml.dump({"token": token}, f)
+```
+
+> **面试一句话：** "fixture是pytest的依赖注入机制，通过yield实现setup/teardown。scope控制生命周期（function/class/module/session）。conftest.py是fixture的共享文件，不需要import，pytest自动发现。"
+
+### 四、参数化 @pytest.mark.parametrize
+
+```python
+import pytest
+
+# 基本参数化：一组参数
+@pytest.mark.parametrize("username, password, expected", [
+    ("admin", "123456", "success"),
+    ("admin", "wrong",  "fail"),
+    ("",      "123456", "fail"),
+])
+def test_login(username, password, expected):
+    result = login(username, password)
+    assert result == expected
+
+# 从YAML文件读取参数化数据（项目中的实际用法）
+def get_testcase_yaml(filepath):
+    """读取YAML测试用例文件"""
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return [(case["baseInfo"], case["testCase"]) for case in data]
+
+@pytest.mark.parametrize("base_info, testcase", get_testcase_yaml("addUser.yaml"))
+def test_add_user(base_info, testcase):
+    allure.dynamic.title(testcase["case_name"])
+    RequestBase().specification_yaml(base_info, testcase)
+```
+
+### 五、常用标记（mark）
+
+```python
+@pytest.mark.run(order=1)          # 指定执行顺序（需要pytest-ordering插件）
+@pytest.mark.skip(reason="bug#123") # 跳过测试
+@pytest.mark.xfail                  # 预期失败（失败不算异常）
+@pytest.mark.parametrize(...)       # 参数化
+@pytest.mark.smoke                  # 自定义标记（配合 -m 使用）
+
+# 运行时过滤
+pytest -m smoke                     # 只运行标记为smoke的测试
+```
+
+### 六、pytest 执行钩子（hooks）
+
+```python
+# conftest.py 中定义hooks
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """所有测试完成后自动调用——生成测试摘要"""
+    total = terminalreporter._numcollected
+    passed = len(terminalreporter.stats.get("passed", []))
+    failed = len(terminalreporter.stats.get("failed", []))
+    duration = round(terminalreporter.duration, 2)
+    
+    summary = f"""
+    ======== 测试报告 ========
+    总用例数：{total}
+    通过：{passed}  失败：{failed}
+    耗时：{duration}秒
+    =========================
+    """
+    print(summary)
+    # 可以在这里发送钉钉/企业微信通知
+```
+
+### 七、面试高频问题
+
+**Q1：pytest和unittest的区别？**
+> pytest语法更简洁（不需要继承TestCase类），fixture比setup/teardown更灵活（支持scope和依赖注入），断言直接用assert（unittest要用self.assertEqual），插件生态更丰富。unittest是Python内置的，pytest需要安装。
+
+**Q2：fixture的scope有哪些？**
+> function（默认，每个测试函数）、class（每个测试类）、module（每个.py文件）、session（整个测试会话）。scope越大生命周期越长，session适合做全局初始化如登录获取token。
+
+**Q3：conftest.py是什么？**
+> conftest.py是pytest的fixture共享文件，放在哪个目录就对哪个目录及其子目录生效。不需要import，pytest会自动发现并加载其中的fixture。
+
+**Q4：参数化怎么做？**
+> 用@pytest.mark.parametrize装饰器，第一个参数是变量名，第二个参数是参数列表。项目中从YAML读取测试数据再参数化，实现数据驱动测试。
+
 ---
 
-# 模块六：测试技术
+## 6.2 requests 库 —— HTTP 接口测试
 
-> （待更新）
+### 一、requests 基本用法
+
+```python
+import requests
+
+# GET 请求
+response = requests.get(
+    url="http://localhost:8080/api/users",
+    params={"page": 1, "size": 10},     # URL查询参数 ?page=1&size=10
+    headers={"token": "abc123"}          # 请求头
+)
+
+# POST 请求（JSON格式）
+response = requests.post(
+    url="http://localhost:8080/api/users",
+    json={"name": "张三", "age": 25},    # 自动设置 Content-Type: application/json
+    headers={"token": "abc123"}
+)
+
+# POST 请求（表单格式）
+response = requests.post(
+    url="http://localhost:8080/api/login",
+    data={"username": "admin", "password": "123456"}  # Content-Type: application/x-www-form-urlencoded
+)
+
+# PUT / DELETE
+response = requests.put(url, json={...})
+response = requests.delete(url)
+```
+
+### 二、Response 对象
+
+```python
+response = requests.get("http://localhost:8080/api/users/1")
+
+response.status_code          # 200（HTTP状态码）
+response.json()               # {"id": 1, "name": "张三"}（解析JSON响应体）
+response.text                 # '{"id": 1, "name": "张三"}'（原始文本）
+response.headers              # {'Content-Type': 'application/json', ...}
+response.cookies              # 响应中的Cookie
+response.elapsed.total_seconds()  # 响应耗时（秒）
+response.encoding             # 响应编码
+```
+
+### 三、项目中封装的 SendRequest 类
+
+```python
+import requests
+import allure
+import json
+
+class SendRequest:
+    """统一请求封装——项目中所有HTTP请求都通过这个类"""
+    
+    def __init__(self):
+        self.session = requests.Session()  # Session对象自动管理Cookie
+    
+    def run_main(self, method, url, data=None, headers=None, **kwargs):
+        """
+        统一请求入口
+        根据method自动选择GET/POST/PUT/DELETE
+        """
+        method = method.upper()
+        
+        # 记录请求信息到Allure报告
+        allure.attach(f"URL: {url}", "请求地址", allure.attachment_type.TEXT)
+        allure.attach(json.dumps(data, ensure_ascii=False), "请求参数", allure.attachment_type.TEXT)
+        
+        try:
+            if method == "GET":
+                response = self.session.get(url, params=data, headers=headers, 
+                                           timeout=60, verify=False)
+            elif method == "POST":
+                response = self.session.post(url, json=data, headers=headers,
+                                            timeout=60, verify=False)
+            elif method == "PUT":
+                response = self.session.put(url, json=data, headers=headers,
+                                           timeout=60, verify=False)
+            elif method == "DELETE":
+                response = self.session.delete(url, headers=headers,
+                                              timeout=60, verify=False)
+            
+            # 记录响应到Allure
+            allure.attach(response.text, "响应结果", allure.attachment_type.TEXT)
+            
+            # 统一返回格式
+            result = {
+                "status_code": response.status_code,
+                "body": response.json(),
+                "text": response.text,
+                "cookies": dict(response.cookies),
+                "elapsed": response.elapsed.total_seconds()
+            }
+            return result
+            
+        except requests.exceptions.ConnectionError:
+            raise Exception("连接失败，请检查服务是否启动")
+        except requests.exceptions.Timeout:
+            raise Exception("请求超时")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"请求异常：{e}")
+```
+
+> **面试一句话：** "用requests.Session()管理会话，自动维护Cookie。封装统一请求入口根据method分发，统一异常处理和日志记录。verify=False跳过SSL验证，timeout=60防止请求卡死。"
+
+### 四、Session 会话管理
+
+```python
+# ❌ 不用Session：每次请求都带Cookie，手动管理
+response1 = requests.post("/api/login", json={...})
+token = response1.json()["token"]
+response2 = requests.get("/api/users", headers={"token": token})  # 手动带token
+
+# ✅ 用Session：自动管理Cookie和连接池
+session = requests.Session()
+response1 = session.post("/api/login", json={...})  # 登录后Cookie自动保存
+response2 = session.get("/api/users")                 # 后续请求自动带上Cookie
+```
+
+|  | 不用 Session | 用 Session |
+|--|-------------|------------|
+| Cookie管理 | 手动从response取，手动放到request | 自动维护 |
+| 连接复用 | 每次新建TCP连接 | 连接池复用（性能更好） |
+| 适用场景 | 单次请求 | 需要登录态的接口测试 |
+
+### 五、接口关联（上一个接口的响应作为下一个接口的参数）
+
+```python
+import jsonpath
+import yaml
+
+# ===== 方案1：直接变量传递 =====
+def test_login_and_query():
+    # 第一步：登录
+    login_resp = requests.post("/api/login", json={"user": "admin", "pwd": "123"})
+    token = login_resp.json()["data"]["token"]    # 提取token
+    
+    # 第二步：用token查询用户信息
+    user_resp = requests.get("/api/users/1", headers={"token": token})
+    assert user_resp.json()["code"] == 200
+
+# ===== 方案2：YAML提取（项目中的做法）=====
+# extract.yaml 存储：{token: "abc123", user_id: 1001}
+
+def extract_data(response, extract_dict):
+    """从响应中提取数据，写入extract.yaml供后续使用"""
+    if not extract_dict:
+        return
+    extract_data = {}
+    for key, json_path in extract_dict.items():
+        # jsonpath提取：$.data.token
+        value = jsonpath.jsonpath(response, json_path)
+        extract_data[key] = value[0]
+    
+    # 写入extract.yaml
+    with open("extract.yaml", "a") as f:
+        yaml.dump(extract_data, f)
+
+# YAML中引用提取的数据
+# token: ${get_extract_data(token)}
+```
+
+### 六、面试高频问题
+
+**Q1：requests中json和data参数的区别？**
+> json参数会自动序列化为JSON并设置Content-Type为application/json；data参数发送表单数据，Content-Type为application/x-www-form-urlencoded。接口测试主要用json参数。
+
+**Q2：为什么要用Session？**
+> Session自动管理Cookie（登录后的sessionId自动在后续请求中携带），而且底层使用连接池复用TCP连接，性能比每次新建连接好。
+
+**Q3：接口自动化中怎么做数据关联？**
+> 第一步：从上一个接口的响应中提取关键数据（token、id等），用jsonpath提取后存到YAML文件或全局变量；第二步：在后续接口的请求参数中通过${get_extract_data(key)}引用这些数据。
+
+---
+
+## 6.3 Allure 测试报告
+
+### 一、Allure 是什么？
+
+Allure 是一个**灵活的、美观的**测试报告框架，可以生成HTML格式的测试报告，展示测试步骤、附件、分类等信息。
+
+```bash
+# 安装
+pip install allure-pytest
+
+# 1. 运行测试并生成原始数据
+pytest --alluredir=./report/temp --clean-alluredir
+
+# 2. 生成并打开HTML报告
+allure serve ./report/temp
+
+# 或者生成静态报告
+allure generate ./report/temp -o ./report/html --clean
+allure open ./report/html
+```
+
+### 二、项目中的 run.py 执行入口
+
+```python
+import pytest
+import shutil
+import os
+
+if __name__ == '__main__':
+    # 1. 运行pytest，生成Allure原始数据
+    pytest.main([
+        '-s', '-v',
+        '--alluredir=./report/temp',       # Allure原始数据目录
+        '--clean-alluredir',                # 每次运行前清空
+        './testcase',                       # 指定测试目录
+        '--junitxml=./report/results.xml',  # 同时生成JUnit XML（给Jenkins用）
+        '-p', 'no:warnings',
+    ])
+    
+    # 2. 复制环境信息到报告目录
+    shutil.copy('./environment.xml', './report/temp')
+    
+    # 3. 自动打开Allure报告
+    os.system('allure serve ./report/temp')
+```
+
+### 三、Allure 装饰器（在测试代码中使用）
+
+```python
+import allure
+
+# 1. @allure.feature —— 测试模块（大分类）
+@allure.feature("用户管理模块")
+class TestUserManage:
+
+    # 2. @allure.story —— 测试场景（小分类）
+    @allure.story("添加用户")
+    @pytest.mark.parametrize("base_info, testcase", get_testcase_yaml("addUser.yaml"))
+    def test_add_user(self, base_info, testcase):
+        # 3. 动态设置测试用例标题
+        allure.dynamic.title(testcase["case_name"])
+        
+        # 4. 添加描述信息
+        allure.description("测试添加用户接口的各种场景")
+        
+        # 5. 添加附件（请求/响应数据）
+        allure.attach(
+            json.dumps(testcase["data"], ensure_ascii=False),
+            name="请求参数",
+            attachment_type=allure.attachment_type.JSON
+        )
+        
+        # 执行测试
+        result = RequestBase().specification_yaml(base_info, testcase)
+        
+        # 6. 添加步骤
+        with allure.step("发送请求并验证响应"):
+            assert result is not None
+        
+        with allure.step("验证数据库"):
+            db_result = db.query("SELECT * FROM users WHERE name='test'")
+            assert len(db_result) > 0
+```
+
+### 四、Allure 报告展示层级
+
+```
+Allure 报告结构：
+├── Feature（模块）        ← @allure.feature("用户管理")
+│   ├── Story（场景）      ← @allure.story("添加用户")
+│   │   ├── 用例1          ← allure.dynamic.title("正常添加")
+│   │   │   ├── Step 1     ← with allure.step("发送请求")
+│   │   │   ├── Step 2     ← with allure.step("验证响应")
+│   │   │   └── 附件       ← allure.attach(...)
+│   │   ├── 用例2
+│   │   └── 用例3
+│   └── Story（另一个场景）
+└── Feature（另一个模块）
+```
+
+### 五、environment.xml —— 报告环境信息
+
+```xml
+<environment>
+    <parameter>
+        <key>Browser</key>
+        <value>Chrome</value>
+    </parameter>
+    <parameter>
+        <key>Python</key>
+        <value>3.10</value>
+    </parameter>
+    <parameter>
+        <key>BaseUrl</key>
+        <value>http://127.0.0.1:8787</value>
+    </parameter>
+    <parameter>
+        <key>Environment</key>
+        <value>测试环境</value>
+    </parameter>
+</environment>
+```
+
+### 六、Allure 报告中的关键信息
+
+| 报告区域 | 展示内容 | 用到的装饰器 |
+|----------|----------|-------------|
+| 概览 | 通过/失败/跳过/总数、耗时图表 | 自动统计 |
+| Suites | 按模块和场景分层的用例列表 | @feature + @story |
+| 用例详情 | 请求参数、响应结果、断言结果 | @attach + @step |
+| 环境 | 测试环境配置信息 | environment.xml |
+| 趋势图 | 历次运行的通过率趋势 | 自动生成（需保留历史数据） |
+
+### 七、面试高频问题
+
+**Q1：Allure报告怎么生成的？**
+> 两步走：pytest运行时用--alluredir生成JSON格式的原始数据，然后用allure serve或allure generate命令将原始数据渲染成HTML报告。报告中展示测试步骤、附件、通过率等。
+
+**Q2：Allure的装饰器怎么用？**
+> @allure.feature标记测试模块，@allure.story标记测试场景，allure.dynamic.title动态设置用例名，allure.attach添加请求/响应附件，with allure.step添加测试步骤。层次是feature > story > 用例 > step。
+
+**Q3：如何在Jenkins中集成Allure？**
+> 安装Jenkins的Allure插件，Pipeline中用allure includeProperties: false, jdk: '', results: [[path: 'report/temp']]生成报告。Jenkins每次构建后会自动在构建页面展示Allure报告链接。
+
+---
+
+## 6.4 YAML 驱动测试（数据驱动）
+
+### 一、为什么用 YAML 驱动测试？
+
+传统方式把测试数据写在Python代码里，改一个参数就要改代码。YAML驱动把**测试数据从代码中分离出来**：
+
+|  | 传统方式 | YAML驱动 |
+|--|---------|----------|
+| 数据位置 | 写死在Python代码里 | 独立的.yaml文件 |
+| 修改方式 | 改代码→重新部署 | 改YAML→直接运行 |
+| 维护成本 | 高（需要懂代码） | 低（非技术人员也能维护） |
+| 可读性 | 一般 | 高（结构清晰） |
+
+### 二、YAML 基本语法
+
+```yaml
+# YAML 语法要点
+
+# 1. 键值对
+name: 张三
+age: 25
+
+# 2. 列表（用 - 开头）
+fruits:
+  - apple
+  - banana
+  - orange
+
+# 3. 嵌套对象
+user:
+  name: 张三
+  address:
+    city: 武汉
+    street: 珞狮路
+
+# 4. 引用变量 & 锚点
+default_config: &default
+  timeout: 30
+  retry: 3
+
+api_config:
+  <<: *default          # 引用default的值
+  host: localhost
+```
+
+```python
+# Python 操作 YAML
+import yaml
+
+# 读取
+with open("test.yaml", "r", encoding="utf-8") as f:
+    data = yaml.safe_load(f)    # safe_load安全加载，防止代码注入
+
+# 写入
+with open("output.yaml", "w") as f:
+    yaml.dump(data, f, allow_unicode=True)
+```
+
+### 三、项目中 YAML 测试用例的完整结构
+
+```yaml
+# addUser.yaml —— 添加用户接口的测试用例
+
+- baseInfo:                             # 接口基本信息（所有testCase共享）
+    api_name: 添加用户
+    url: /api/user/add                  # 接口路径（host在config.ini中配置）
+    method: post                        # 请求方法
+    header:                             # 请求头
+      Content-Type: application/json;charset=UTF-8
+      token: ${get_extract_data(token)} # 动态引用：从extract.yaml取token
+      
+  testCase:                             # 测试场景列表（可以有多个）
+    - case_name: 正常添加用户            # 场景1：正常场景
+      json:                             # 请求参数（JSON格式）
+        login_name: test_${timestamp()} # 动态生成用户名（时间戳）
+        password: ${md5_encryption(123456)}  # MD5加密密码
+        email: test@example.com
+      validation:                       # 断言规则
+        - contains: {'msg': '操作成功'}
+        - eq: {'status_code': 200}
+      extract:                          # 提取数据
+        user_id: $.data.id              # JSONPath提取新用户ID
+        
+    - case_name: 重复用户名添加          # 场景2：异常场景
+      json:
+        login_name: admin               # 已存在的用户名
+        password: 123456
+        email: admin@example.com
+      validation:
+        - contains: {'msg': '用户名已存在'}
+```
+
+### 四、YAML 中的动态参数替换
+
+```python
+import re
+import yaml
+
+def replace_load(data):
+    """替换YAML中的 ${function()} 动态参数"""
+    if isinstance(data, dict):
+        for key, value in data.items():
+            data[key] = replace_load(value)         # 递归处理字典
+    elif isinstance(data, list):
+        for i, item in enumerate(data):
+            data[i] = replace_load(item)             # 递归处理列表
+    elif isinstance(data, str):
+        # 匹配 ${function(args)} 模式
+        pattern = r'\$\{(.*?)\((.*?)\)\}'
+        matches = re.findall(pattern, data)
+        for func_name, args in matches:
+            # 动态调用debugtalk.py中的函数
+            func = getattr(debugtalk, func_name)
+            result = func(args) if args else func()
+            data = data.replace(f'${{{func_name}({args})}}', str(result))
+    return data
+```
+
+**debugtalk.py 中定义的动态函数：**
+
+```python
+# common/debugtalk.py —— YAML可调用的工具函数
+
+import time
+import hashlib
+
+def timestamp():
+    """10位时间戳"""
+    return str(int(time.time()))
+
+def timestamp_thirteen():
+    """13位时间戳（毫秒）"""
+    return str(int(time.time() * 1000))
+
+def md5_encryption(text):
+    """MD5加密"""
+    return hashlib.md5(text.encode()).hexdigest()
+
+def get_extract_data(key, index=0):
+    """从extract.yaml中获取数据"""
+    with open("extract.yaml", "r") as f:
+        data = yaml.safe_load(f)
+    if index == 0:
+        return data.get(key)            # 返回单个值
+    elif index == -1:
+        return str(data.get(key))       # 转字符串
+    elif index == -2:
+        return data.get(key)            # 返回列表
+```
+
+### 五、断言框架（Assertions）
+
+```python
+# common/assertions.py —— 5种断言类型
+
+class Assertions:
+    
+    def assert_result(self, response_data, validation_list):
+        """统一断言入口"""
+        for validation in validation_list:
+            if "contains" in validation:
+                # 1. 包含断言：响应文本包含指定字符串
+                expected = validation["contains"]
+                for key, value in expected.items():
+                    assert str(value) in str(response_data), \
+                        f"断言失败：响应中不包含 {value}"
+            
+            elif "eq" in validation:
+                # 2. 相等断言：JSON中某个字段等于期望值
+                expected = validation["eq"]
+                for key, value in expected.items():
+                    actual = jsonpath.jsonpath(response_data, f"$.{key}")[0]
+                    assert actual == value, \
+                        f"断言失败：{key} 期望{value}，实际{actual}"
+            
+            elif "ne" in validation:
+                # 3. 不等断言
+                expected = validation["ne"]
+                for key, value in expected.items():
+                    actual = jsonpath.jsonpath(response_data, f"$.{key}")[0]
+                    assert actual != value
+            
+            elif "rv" in validation:
+                # 4. 响应值断言（任意层级字段）
+                expected = validation["rv"]
+                for key, value in expected.items():
+                    actual = jsonpath.jsonpath(response_data, f"$.{key}")[0]
+                    assert actual == value
+            
+            elif "db" in validation:
+                # 5. 数据库断言：执行SQL并验证
+                sql = validation["db"]
+                db_result = ConnectMysql().query_all(sql)
+                assert len(db_result) > 0, f"数据库查询无结果：{sql}"
+```
+
+**YAML中的断言写法：**
+
+```yaml
+validation:
+  - contains: {'msg': '操作成功'}        # 响应包含"操作成功"
+  - eq: {'error_code': '0000'}          # error_code等于0000
+  - ne: {'status': 'deleted'}           # status不等于deleted
+  - rv: {'data.name': '张三'}            # data.name等于张三
+  - db: SELECT * FROM users WHERE name='张三'  # 数据库能查到记录
+```
+
+### 六、完整执行流程
+
+```
+run.py 启动
+    │
+    ↓
+pytest 发现 test_*.py 文件
+    │
+    ↓
+conftest.py 执行 session 级 fixture
+    ├── 清空 extract.yaml
+    └── 自动登录（获取token存入extract.yaml）
+    │
+    ↓
+读取 YAML 测试用例文件
+    ├── 解析 baseInfo（接口信息）
+    └── 解析 testCase（测试场景）
+    │
+    ↓
+替换动态参数 ${function()}
+    ├── ${get_extract_data(token)} → 从extract.yaml取值
+    ├── ${timestamp()} → 当前时间戳
+    └── ${md5_encryption(123456)} → 加密后的密码
+    │
+    ↓
+发送 HTTP 请求（SendRequest）
+    │
+    ↓
+提取响应数据（extract）
+    └── 存入 extract.yaml 供后续用例使用
+    │
+    ↓
+执行断言（Assertions）
+    ├── contains / eq / ne / rv / db
+    │
+    ↓
+记录 Allure 报告
+    ├── @feature / @story / @step
+    └── allure.attach（请求参数 + 响应结果）
+    │
+    ↓
+生成 Allure HTML 报告 + 发送通知
+```
+
+### 七、面试高频问题
+
+**Q1：什么是数据驱动测试？**
+> 测试数据和测试逻辑分离。测试数据存放在YAML/CSV/Excel中，测试代码读取数据后执行，添加新的测试场景只需要添加一条数据，不需要改代码。好处是维护成本低、非技术人员也能维护用例。
+
+**Q2：YAML测试用例的结构是怎样的？**
+> 分为baseInfo（接口基本信息：URL、method、header）和testCase（测试场景列表，包含case_name、请求参数、validation断言、extract提取）。baseInfo所有场景共享，每个testCase是一个独立的测试场景。
+
+**Q3：YAML中的动态参数怎么实现？**
+> 用 ${function()} 语法，在读取YAML后通过正则匹配提取函数名和参数，动态调用debugtalk.py中的函数获取实际值（时间戳、加密结果、提取的数据等），替换后再发送请求。
+
+---
+
+## 6.5 功能测试方法
+
+### 一、黑盒测试概述
+
+**黑盒测试：** 不关注代码内部实现，只关注输入和输出——从用户角度验证功能是否正确。
+
+| 方法 | 关注点 | 适用场景 |
+|------|--------|----------|
+| 等价类划分 | 将输入分为有效/无效等价类 | 表单输入、参数验证 |
+| 边界值分析 | 测试边界上的值 | 数值范围、字符串长度 |
+| 判定表/因果图 | 多条件组合 | 逻辑复杂的业务 |
+| 错误推测 | 凭经验猜测容易出错的地方 | 补充测试 |
+| 正交实验 | 减少多因素组合数 | 配置项多的情况 |
+
+### 二、等价类划分（面试必考）
+
+**核心思想：** 把所有可能的输入划分成若干"等价类"，每个类中选一个代表值测试——如果这个值对了，整个类都认为是对的。
+
+#### 例：用户注册页面——用户名输入框
+
+| 规则 | 有效等价类 | 无效等价类 |
+|------|-----------|-----------|
+| 长度 | 6~20个字符 | <6个字符；>20个字符 |
+| 字符类型 | 字母+数字 | 特殊字符(@#$)；纯空格；中文 |
+| 首字符 | 字母开头 | 数字开头；特殊字符开头 |
+| 唯一性 | 不存在的用户名 | 已存在的用户名 |
+| 空值 | 非空 | 空（不输入） |
+
+```
+有效测试用例：zhangsan123（6-20位字母数字，字母开头）→ 应该注册成功
+无效测试用例：
+  - abc（少于6位）→ 应提示"用户名至少6位"
+  - abcdefghijklmnopqrst12345（超过20位）→ 应提示"用户名最多20位"
+  - 123abc（数字开头）→ 应提示"用户名必须字母开头"
+  - abc@123（含特殊字符）→ 应提示"用户名只能包含字母和数字"
+  - admin（已存在）→ 应提示"用户名已存在"
+  - （空）→ 应提示"请输入用户名"
+```
+
+> **面试一句话：** "等价类划分是把输入分为有效等价类和无效等价类，每类选一个代表值测试。有效等价类验证正常流程，无效等价类验证异常处理。"
+
+### 三、边界值分析（面试必考）
+
+**核心思想：** 大量bug出现在边界上，所以要重点测试边界值。
+
+#### 规则：找边界 → 测试边界及两侧
+
+| 边界 | 低于边界 | 边界值 | 高于边界 |
+|------|---------|--------|---------|
+| 长度6~20 | 5（不通过） | 6（通过） | 7（通过） |
+| | 19（通过） | 20（通过） | 21（不通过） |
+| 年龄18~65 | 17（不通过） | 18（通过） | 19（通过） |
+| | 64（通过） | 65（通过） | 66（不通过） |
+
+#### 例：订单金额 1~99999 元
+
+```
+边界值测试用例：
+  - 0.99元  → 无效（低于最小值）
+  - 1元     → 有效（最小边界）
+  - 1.01元  → 有效
+  - 99998元 → 有效
+  - 99999元 → 有效（最大边界）
+  - 100000元 → 无效（超过最大值）
+```
+
+> **面试一句话：** "边界值分析是测试边界及两侧的值。规则是：如果范围是[a,b]，就测试a-1、a、a+1、b-1、b、b+1。因为大部分bug出现在边界上。"
+
+### 四、等价类 + 边界值 结合使用（面试常考综合题）
+
+#### 例：密码输入框（8~16位，必须包含字母和数字）
+
+```
+等价类划分：
+  有效：8~16位，含字母和数字     → "abc12345"
+  无效：少于8位                  → "ab12"
+  无效：多于16位                 → "abcdefghijklmnopq1234567890"
+  无效：只有字母没有数字          → "abcdefgh"
+  无效：只有数字没有字母          → "12345678"
+  无效：含特殊字符               → "abc@1234"
+  无效：空                       → ""
+
+边界值（在有效等价类的基础上）：
+  长度=7   → 无效（abc1234）
+  长度=8   → 有效（abc12345）
+  长度=9   → 有效（abc123456）
+  长度=15  → 有效（abcdefghijklmn1）
+  长度=16  → 有效（abcdefghijklmno1）
+  长度=17  → 无效（abcdefghijklmnopq1）
+```
+
+### 五、判定表（多条件组合）
+
+当多个条件互相影响时，用判定表穷举所有组合。
+
+#### 例：电商优惠券使用条件
+
+| 条件 | 规则1 | 规则2 | 规则3 | 规则4 | 规则5 |
+|------|-------|-------|-------|-------|-------|
+| 订单金额 ≥ 100 | Y | Y | Y | N | N |
+| 会员等级 ≥ 金牌 | Y | Y | N | Y | N |
+| 优惠券未过期 | Y | N | Y | Y | N |
+| **能否使用** | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+### 六、测试用例的完整写法
+
+```yaml
+# 一个完整测试用例的要素
+test_case:
+  id: TC_USER_001
+  title: 正常添加用户
+  priority: P1                    # 优先级
+  precondition: 已登录管理员账号    # 前置条件
+  steps:                          # 测试步骤
+    - step: 进入用户管理页面
+    - step: 点击"添加用户"按钮
+    - step: 输入用户名test001，密码123456，邮箱test@mail.com
+    - step: 点击"提交"按钮
+  expected:                       # 预期结果
+    - 页面提示"添加成功"
+    - 用户列表中出现test001
+    - 数据库中新增一条用户记录
+```
+
+### 七、面试高频问题
+
+**Q1：等价类划分和边界值分析的区别？**
+> 等价类划分是从大量数据中选出代表性数据（每类选一个），减少测试数量；边界值分析是专门测试边界上的值（a-1、a、a+1），因为边界最容易出错。实际中两者结合使用。
+
+**Q2：给你一个登录页面，怎么设计测试用例？**
+> 先用等价类划分（用户名/密码各分有效和无效等价类），再用边界值分析（用户名长度边界），然后考虑异常场景（空值、SQL注入、XSS）、安全场景（暴力破解、session过期）、兼容性（不同浏览器）。
+
+**Q3：什么是P0/P1/P2优先级？**
+> P0：冒烟测试级别的核心功能（比如登录、下单）；P1：主要功能路径；P2：次要功能和异常场景；P3：边界和极端场景。优先级越高越早测试。
+
+---
+
+## 6.6 日志与 Jenkins CI
+
+### 一、日志记录（logging）
+
+#### 1. 为什么需要日志？
+
+- 测试失败时，日志是**定位问题的第一手证据**
+- 记录请求参数、响应结果、断言结果
+- 自动化测试无人值守运行，日志是唯一的排查手段
+
+#### 2. Python logging 模块
+
+```python
+import logging
+from logging.handlers import RotatingFileHandler
+
+def setup_logger():
+    """配置日志"""
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    
+    # 格式：时间 - 级别 - 文件:行号 - [模块:函数] - 消息
+    fmt = logging.Formatter(
+        '%(levelname)s - %(asctime)s - %(filename)s:%(lineno)d - '
+        '[%(module)s:%(funcName)s] - %(message)s'
+    )
+    
+    # 文件输出（自动轮转：每个文件5MB，保留7个备份，保留30天）
+    file_handler = RotatingFileHandler(
+        "logs/test.log",
+        maxBytes=5*1024*1024,    # 5MB
+        backupCount=7,
+        encoding="utf-8"
+    )
+    file_handler.setFormatter(fmt)
+    
+    # 控制台输出
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(fmt)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    return logger
+```
+
+#### 3. 日志级别
+
+| 级别 | 数值 | 使用场景 |
+|------|------|----------|
+| DEBUG | 10 | 调试信息（请求参数、响应体） |
+| INFO | 20 | 正常流程信息（测试开始/结束） |
+| WARNING | 30 | 警告（接口响应慢、数据异常） |
+| ERROR | 40 | 错误（断言失败、请求异常） |
+| CRITICAL | 50 | 严重错误（服务不可用） |
+
+#### 4. 项目中的日志使用
+
+```python
+# common/recordlog.py
+logger = setup_logger()
+
+# 在请求封装中使用
+class SendRequest:
+    def run_main(self, method, url, data, **kwargs):
+        logger.info(f"发送请求：{method} {url}")
+        logger.debug(f"请求参数：{json.dumps(data, ensure_ascii=False)}")
+        
+        try:
+            response = self.session.request(method, url, json=data, **kwargs)
+            logger.info(f"响应状态码：{response.status_code}")
+            logger.debug(f"响应内容：{response.text}")
+            return response
+        except Exception as e:
+            logger.error(f"请求异常：{e}")
+            raise
+```
+
+### 二、Jenkins CI 持续集成
+
+#### 1. 为什么需要 Jenkins？
+
+| 没有Jenkins | 有Jenkins |
+|------------|-----------|
+| 手动运行测试脚本 | 定时/触发自动运行 |
+| 本地跑，结果只有自己看 | 服务器跑，团队都能看报告 |
+| 没有历史趋势 | 历次构建结果对比 |
+| 失败了没人知道 | 失败自动发通知（钉钉/邮件） |
+
+#### 2. Jenkins Pipeline 配置
+
+```groovy
+// Jenkinsfile
+pipeline {
+    agent any
+    
+    tools {
+        python 'Python3.10'
+    }
+    
+    triggers {
+        cron('0 2 * * *')          // 每天凌晨2点自动运行
+        // pollSCM('H/5 * * * *')  // 或者：代码提交后自动运行
+    }
+    
+    stages {
+        stage('拉取代码') {
+            steps {
+                git branch: 'main', url: 'https://github.com/xxx/api-test.git'
+            }
+        }
+        
+        stage('安装依赖') {
+            steps {
+                sh 'pip install -r requirements.txt'
+            }
+        }
+        
+        stage('执行测试') {
+            steps {
+                sh 'python run.py'
+            }
+        }
+        
+        stage('生成Allure报告') {
+            steps {
+                allure includeProperties: false,
+                       jdk: '',
+                       results: [[path: 'report/temp']]
+            }
+        }
+    }
+    
+    post {
+        always {
+            // 不管成功失败都发钉钉通知
+            dingtalk(
+                robot: '测试机器人',
+                type: 'TEXT',
+                text: ["测试完成：${currentBuild.result}，详情：${env.BUILD_URL}"]
+            )
+        }
+        failure {
+            mail to: 'team@example.com',
+                 subject: "测试失败：${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                 body: "测试失败了，请查看：${env.BUILD_URL}allure"
+        }
+    }
+}
+```
+
+#### 3. Jenkins + Allure + 钉钉 完整流程
+
+```
+代码提交到Git
+    │
+    ↓
+Jenkins 自动触发构建（或定时触发）
+    │
+    ↓
+┌─────────────────────────┐
+│ Stage 1: 拉取最新代码     │
+│ Stage 2: 安装依赖         │
+│ Stage 3: 执行pytest测试   │
+│   ├── 生成 Allure 数据    │
+│   └── 生成 JUnit XML      │
+│ Stage 4: 生成 Allure 报告  │
+└─────────────────────────┘
+    │
+    ↓
+post 阶段：发送通知
+    ├── 钉钉机器人：发送测试摘要
+    └── 邮件：失败时发送告警
+    │
+    ↓
+团队成员查看 Allure 报告
+    ├── 通过率、失败用例
+    ├── 请求参数、响应结果
+    └── 历史趋势对比
+```
+
+#### 4. 钉钉通知集成
+
+```python
+# common/dingRobot.py
+import requests
+import time
+
+def send_dd_msg(summary):
+    """发送钉钉机器人通知"""
+    webhook = "https://oapi.dingtalk.com/robot/send?access_token=xxx"
+    
+    data = {
+        "msgtype": "text",
+        "text": {
+            "content": f"""
+【自动化测试报告】
+项目：智测星图
+时间：{time.strftime('%Y-%m-%d %H:%M:%S')}
+{summary}
+详情请查看Jenkins: http://jenkins.example.com/job/api-test/
+"""
+        }
+    }
+    requests.post(webhook, json=data)
+```
+
+### 三、面试高频问题
+
+**Q1：自动化测试中的日志怎么设计？**
+> 使用Python的logging模块，配置RotatingFileHandler实现日志轮转（防止单个文件过大）。双输出：文件+控制台。在请求发送前后记录URL、参数、响应、耗时。日志级别：DEBUG记录详细信息，INFO记录流程，ERROR记录异常。
+
+**Q2：Jenkins在自动化测试中的作用？**
+> 实现持续集成：定时或代码提交触发自动运行测试，生成Allure报告，失败时自动发钉钉/邮件通知。这样测试不需要人工干预，团队随时查看最新测试结果和历史趋势。
+
+**Q3：pytest怎么生成JUnit XML？**
+> pytest运行时加--junitxml=./report/results.xml参数，生成JUnit格式的XML报告。Jenkins可以直接解析这个文件展示测试结果，和Allure报告互补。
 
 ---
 
