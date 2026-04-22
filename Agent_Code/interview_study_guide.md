@@ -1725,7 +1725,189 @@ DisposableBean.destroy() / destroy-method  ← @PreDestroy
 
 # 模块五：后端开发 + 设计模式
 
-> （待更新）
+## 5.1 FastAPI 框架
+
+### 一、FastAPI 是什么
+
+FastAPI 是 Python 的现代 Web 框架，核心特点：**快**（性能接近Go/Node.js）、**简单**（代码少）、**自动文档**（自带Swagger UI）。
+
+```text
+FastAPI 的核心依赖：
+├── Starlette    ← 底层HTTP框架（处理请求响应）
+├── Pydantic     ← 数据校验（校验请求参数）
+└── Uvicorn      ← ASGI服务器（运行FastAPI应用）
+```
+
+### 二、第一个 FastAPI 应用
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"message": "Hello World"}
+
+@app.get("/users/{user_id}")
+def get_user(user_id: int):
+    return {"user_id": user_id}
+```
+
+```bash
+uvicorn main:app --reload    # --reload 开发热重载
+# 访问 http://localhost:8000/docs 自动生成Swagger文档
+```
+
+### 三、Pydantic 数据校验
+
+```python
+from pydantic import BaseModel, Field
+
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=20)
+    email: str = Field(..., pattern=r"^[\w.-]+@[\w.-]+\.\w+$")
+    age: int = Field(default=18, ge=0, le=150)
+
+@app.post("/users")
+def create_user(user: UserCreate):
+    return {"username": user.username, "email": user.email}
+```
+
+> **面试一句话：** "Pydantic用BaseModel+类型注解自动校验请求参数，校验失败自动返回422错误。"
+
+### 四、参数获取的四种方式
+
+| 方式 | 数据来源 | 示例 |
+|------|----------|------|
+| 路径参数 | URL路径 | `/users/{id}` |
+| 查询参数 | `?key=value` | `?page=1&size=10` |
+| 请求体 | Body JSON | `{"name": "test"}` |
+| Header/Cookie | 请求头/Cookie | `Authorization: Bearer xxx` |
+
+### 五、依赖注入
+
+```python
+async def get_current_user(token: str = Header(...)):
+    user = verify_token(token)
+    if not user:
+        raise HTTPException(status_code=401)
+    return user
+
+@app.get("/me")
+def get_me(user = Depends(get_current_user)):
+    return {"username": user.username}
+```
+
+> **面试一句话：** "Depends()将认证等横切逻辑抽成函数注入路由，类似Spring IoC但用函数实现。"
+
+### 六、中间件
+
+```python
+@app.middleware("http")
+async def log_middleware(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    print(f"耗时: {time.time()-start:.3f}s")
+    return response
+```
+
+**CORS（前后端分离必配）：** 浏览器同源策略限制跨域请求，需后端配置 `CORSMiddleware` 允许前端跨域访问。
+
+### 七、面试高频 Q&A
+
+**Q1：FastAPI的特点？** > 异步ASGI高性能、Pydantic自动校验、自带Swagger文档。
+
+**Q2：依赖注入？** > Depends()将通用逻辑（认证、数据库）抽成函数自动注入。
+
+**Q3：Pydantic的作用？** > BaseModel+类型注解自动校验参数，失败返回422。
+
+---
+
+## 5.2 RESTful API 设计
+
+### 一、REST 核心原则
+
+- URL表示资源（名词），HTTP方法表示操作（动词）
+- 无状态（每次请求自带Token）
+
+### 二、设计规范
+
+| 操作 | URL | HTTP方法 | 状态码 |
+|------|-----|----------|--------|
+| 获取列表 | `/users` | GET | 200 |
+| 获取单个 | `/users/123` | GET | 200 |
+| 创建 | `/users` | POST | 201 |
+| 全量更新 | `/users/123` | PUT | 200 |
+| 部分更新 | `/users/123` | PATCH | 200 |
+| 删除 | `/users/123` | DELETE | 204 |
+
+### 三、面试高频 Q&A
+
+**Q1：什么是RESTful？** > URL名词+HTTP动词+无状态通信。
+
+**Q2：PUT vs PATCH？** > PUT全量更新，PATCH部分更新。
+
+**Q3：为什么无状态？** > 服务器不保存会话，便于水平扩展。
+
+---
+
+## 5.3 设计模式（单例/工厂/观察者/策略）
+
+### 一、单例模式
+
+**核心：** 全局唯一实例。**DCL实现：** volatile + 双重检查。
+
+```java
+public class Singleton {
+    private static volatile Singleton instance;
+    private Singleton() {}
+    public static Singleton getInstance() {
+        if (instance == null) {
+            synchronized (Singleton.class) {
+                if (instance == null) instance = new Singleton();
+            }
+        }
+        return instance;
+    }
+}
+```
+
+> volatile禁止指令重排序，两次null检查避免重复创建。
+
+### 二、工厂模式
+
+**核心：** 封装对象创建，调用方不关心具体类。
+
+```java
+class AnimalFactory {
+    static Animal create(String type) {
+        if ("dog".equals(type)) return new Dog();
+        if ("cat".equals(type)) return new Cat();
+    }
+}
+```
+
+### 三、观察者模式
+
+**核心：** 一对多通知。状态变化时自动通知所有观察者。
+
+**应用：** Vue响应式、Spring事件机制、消息队列。
+
+### 四、策略模式
+
+**核心：** 算法封装为独立策略类，运行时可替换。消除if-else，符合开闭原则。
+
+**应用：** 主人项目中LLMFactory切换DeepSeek/Ollama就是策略模式。
+
+### 五、总结
+
+| 模式 | 核心思想 | 项目体现 |
+|------|----------|---------|
+| 单例 | 全局唯一 | LLMFactory |
+| 工厂 | 封装创建 | LLMFactory |
+| 观察者 | 一对多通知 | Vue响应式 |
+| 策略 | 算法可替换 | LLM Provider切换 |
 
 ---
 
