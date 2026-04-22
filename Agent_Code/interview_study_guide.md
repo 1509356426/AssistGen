@@ -1715,11 +1715,7 @@ DisposableBean.destroy() / destroy-method  ← @PreDestroy
 
 > 默认singleton作用域下不是线程安全的，因为单例Bean被多个线程共享。有状态的Bean需要用prototype作用域或自己保证线程安全。无状态的Bean（如Service、Dao）天然线程安全。
 
----
 
-# 模块五：后端开发 + 设计模式
-
-> （待更新）
 
 ---
 
@@ -1913,7 +1909,239 @@ class AnimalFactory {
 
 # 模块二：MySQL 数据库
 
-> （待更新）
+## 2.1 MySQL 基本操作
+
+### 一、CRUD 增删改查
+
+```sql
+CREATE TABLE users (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(50) NOT NULL,
+    age INT DEFAULT 0,
+    email VARCHAR(100) UNIQUE
+);
+
+INSERT INTO users (name, age, email) VALUES ('张三', 25, 'zs@mail.com');
+DELETE FROM users WHERE id = 1;
+UPDATE users SET age = 26 WHERE name = '张三';
+SELECT name, age FROM users WHERE age > 20 ORDER BY age DESC LIMIT 10;
+```
+
+### 二、DELETE vs TRUNCATE
+
+|  | DELETE | TRUNCATE |
+|--|-------|----------|
+| 本质 | DML，逐行删除 | DDL，删除表再重建 |
+| WHERE | 支持 | 不支持 |
+| 速度 | 慢 | 快 |
+| 回滚 | 可以 | 不可以 |
+| 自增ID | 不重置 | 重置 |
+
+### 三、JOIN 连接查询
+
+```sql
+-- 内连接：只返回两表都有匹配的行
+SELECT u.name, o.amount FROM users u INNER JOIN orders o ON u.id = o.user_id;
+
+-- 左连接：左表全保留，右表没匹配填NULL
+SELECT u.name, o.amount FROM users u LEFT JOIN orders o ON u.id = o.user_id;
+```
+
+### 四、WHERE vs HAVING
+
+|  | WHERE | HAVING |
+|--|-------|--------|
+| 过滤时机 | 分组前 | 分组后 |
+| 能用聚合函数 | 不能 | 能 |
+
+### 五、面试 Q&A
+
+**DELETE vs TRUNCATE？** > DELETE逐行删除可回滚，TRUNCATE重建表不可回滚。
+**INNER JOIN vs LEFT JOIN？** > INNER取交集，LEFT左表全保留。
+
+---
+
+## 2.2 MySQL 索引
+
+### 一、B+ 树结构（面试必问）
+
+```text
+                    [30 | 60]                     ← 根节点（只存key）
+                  ╱          ╲
+         [10|20|30]        [40|50|60]              ← 中间节点
+        ╱    |    ╲        ╱    |    ╲
+     [1-10] [11-20] [21-30] [31-40] [41-50] [51-60] ← 叶子节点（key+数据）
+        └──────┴──────┴──────┴──────┴──────┘
+              叶子节点双向链表连接 → 范围查询极快
+```
+
+**B+树特点：** 非叶子节点只存key（树更矮IO更少），数据全在叶子（查询稳定），叶子链表（范围查询快）。
+
+> **面试一句话：** "B+树非叶子只存key使树更矮，叶子链表支持范围查询，这是MySQL选择B+树的原因。"
+
+### 二、聚簇索引 vs 非聚簇索引
+
+|  | 聚簇索引（主键） | 非聚簇索引（二级） |
+|--|------------------|-------------------|
+| 叶子存什么 | 完整行数据 | 主键ID |
+| 数量 | 一张表只有一个 | 可以有多个 |
+| 查找 | 直接拿到数据 | 需要回表查主键索引 |
+
+**回表：** 二级索引查到主键ID → 回主键索引查完整数据（查两棵树）。
+
+### 三、覆盖索引
+
+查询的所有字段都在索引中，不需要回表。EXPLAIN的Extra显示 `Using index`。
+
+### 四、最左前缀匹配
+
+联合索引 `(name, age, email)` 从最左列开始匹配，遇到范围查询停止。
+
+```sql
+-- ✅ name / name,age / name,age,email 都能用
+-- ❌ 跳过name直接查age或email不能用
+-- ⚠️ name='张三' AND age > 20 AND email='...' 只能用到name和age
+```
+
+### 五、索引失效场景
+
+| 场景 | 示例 |
+|------|------|
+| 函数计算 | `WHERE YEAR(create_time) = 2024` |
+| 隐式类型转换 | `WHERE varchar_col = 123` |
+| LIKE左模糊 | `WHERE name LIKE '%张'` |
+| OR无索引列 | `WHERE name='张三' OR age=25`（age无索引） |
+
+### 六、面试 Q&A
+
+**为什么用B+树？** > 非叶子只存key树更矮，叶子链表支持范围查询。
+**什么是回表？** > 二级索引查到主键后回主键索引查完整数据。覆盖索引可避免。
+**最左前缀？** > 从最左列开始匹配，遇范围查询停止。
+
+---
+
+## 2.3 MySQL 事务
+
+### 一、ACID 四大特性
+
+| 特性 | 含义 | 实现方式 |
+|------|------|----------|
+| 原子性(A) | 全做或全不做 | undo log |
+| 一致性(C) | 满足约束 | 由A+I+D保证 |
+| 隔离性(I) | 并发互不干扰 | 锁 + MVCC |
+| 持久性(D) | 永久保存 | redo log |
+
+### 二、并发事务问题
+
+| 问题 | 含义 |
+|------|------|
+| 脏读 | 读到未提交数据 |
+| 不可重复读 | 同事务内同一行两次读不同（被UPDATE） |
+| 幻读 | 同事务内两次查询行数不同（被INSERT） |
+
+### 三、四种隔离级别
+
+| 隔离级别 | 脏读 | 不可重复读 | 幻读 |
+|----------|------|-----------|------|
+| 读未提交 | ❌ | ❌ | ❌ |
+| 读已提交(RC) | ✅ | ❌ | ❌ |
+| 可重复读(RR)**默认** | ✅ | ✅ | ✅* |
+| 串行化 | ✅ | ✅ | ✅ |
+
+*MySQL在RR级别通过MVCC+间隙锁基本解决幻读。
+
+### 四、面试 Q&A
+
+**ACID？** > 原子性(undo log)、一致性、隔离性(锁+MVCC)、持久性(redo log)。
+**脏读/不可重复读/幻读？** > 脏读读未提交、不可重复读内容变了、幻读行数变了。
+
+---
+
+## 2.4 MVCC（多版本并发控制）
+
+### 一、三个核心组件
+
+1. **隐藏字段：** `DB_TRX_ID`(最后修改的事务ID) + `DB_ROLL_PTR`(指向undo log旧版本)
+2. **undo log版本链：** 每次UPDATE的旧版本通过ROLL_PTR串联
+3. **ReadView：** 记录当前活跃事务，判断版本可见性
+
+### 二、可见性判断规则
+
+```text
+对每个版本的 DB_TRX_ID：
+① == creator_trx_id → 自己改的，可见
+② < min_trx_id → 修改时都已提交，可见
+③ >= max_trx_id → ReadView之后才开始的，不可见
+④ 在 m_ids 中 → 未提交，不可见；不在 → 已提交，可见
+不可见 → 沿ROLL_PTR找上一个版本继续判断
+```
+
+### 三、RC vs RR 区别（面试必问）
+
+|  | RC | RR |
+|--|-----|-----|
+| ReadView | 每次SELECT生成新的 | 第一次SELECT生成，后续复用 |
+| 效果 | 能看到最新提交数据 | 同事务内读取一致 |
+
+> "RC每次SELECT生成新ReadView，RR只在第一次生成并复用——这就是RR能防止不可重复读的根本原因。"
+
+---
+
+## 2.5 MySQL 锁
+
+### 一、行锁的三种形态
+
+| 锁类型 | 锁什么 | 防止什么 |
+|--------|--------|----------|
+| 记录锁(Record Lock) | 锁单行 | 防修改/删除 |
+| 间隙锁(Gap Lock) | 锁两行之间的间隙 | 防INSERT |
+| 临键锁(Next-Key Lock)**默认** | 行 + 前面的间隙 | 防修改 + 防插入（防幻读） |
+
+### 二、共享锁 vs 排他锁
+
+|  | 共享锁(S/读锁) | 排他锁(X/写锁) |
+|--|----------------|----------------|
+| SQL | `LOCK IN SHARE MODE` | `FOR UPDATE` |
+| 读 | 允许其他S锁 | 阻塞 |
+| 写 | 阻塞 | 阻塞 |
+
+### 三、面试 Q&A
+
+**InnoDB有哪些行锁？** > 记录锁、间隙锁、临键锁（默认=前两者之和）。
+**怎么防幻读？** > 临键锁锁行+间隙防INSERT，MVCC保证读一致性。
+
+---
+
+## 2.6 SQL 优化
+
+### 一、EXPLAIN 关键字段
+
+| 字段 | 含义 | 理想值 |
+|------|------|--------|
+| type | 访问类型 | ref/range（避免ALL） |
+| key | 使用的索引 | 不为NULL |
+| rows | 扫描行数 | 越少越好 |
+| Extra | 额外信息 | Using index（覆盖索引） |
+
+**type排序：** system > const > eq_ref > ref > range > index > ALL
+
+### 二、优化策略
+
+1. **避免索引失效：** 不在索引列上用函数/运算
+2. **避免SELECT ***：** 用覆盖索引
+3. **深分页优化：** `WHERE id > 上次最大值 LIMIT n` 代替 `OFFSET`
+4. **小表驱动大表：** 小结果集驱动大表查询
+5. **EXISTS替代IN：** 子查询结果集大时用EXISTS
+
+### 三、面试 Q&A
+
+**怎么分析慢查询？** > EXPLAIN看type/key/Extra，定位后加索引或改写SQL。
+**什么是覆盖索引？** > 查询字段都在索引中不回表，Extra显示Using index。
+**深分页怎么优化？** > 游标分页 `WHERE id > ? LIMIT n`。
+
+---
+
+# 模块六：测试技术
 
 ---
 
