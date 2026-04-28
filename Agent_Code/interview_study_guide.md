@@ -16,7 +16,21 @@
 - [模块五：后端开发 + 设计模式](#模块五后端开发--设计模式)
 - [模块二：MySQL 数据库](#模块二mysql-数据库)
 - [模块六：测试技术](#模块六测试技术)
+  - [6.1 pytest 测试框架](#61-pytest-测试框架)
+  - [6.2 requests 库](#62-requests-库--http-接口测试)
+  - [6.3 Allure 测试报告](#63-allure-测试报告)
+  - [6.4 YAML 驱动测试](#64-yaml-驱动测试数据驱动)
+  - [6.5 功能测试方法](#65-功能测试方法)
+  - [6.6 日志与 Jenkins CI](#66-日志与-jenkins-ci)
 - [模块三：AI / Agent / RAG](#模块三ai--agent--rag)
+  - [3.1 大语言模型（LLM）基础](#31-大语言模型llm基础)
+  - [3.2 RAG 与 GraphRAG](#32-rag-与-graphrag)
+  - [3.3 Neo4j 图数据库](#33-neo4j-图数据库)
+  - [3.4 FAISS 向量检索](#34-faiss-向量检索)
+  - [3.5 LangChain + LangGraph](#35-langchain--langgraph)
+  - [3.6 Multi-Agent 多智能体架构](#36-multi-agent-多智能体架构)
+  - [3.7 意图识别 + Map-Reduce 并行](#37-意图识别--map-reduce-并行)
+  - [3.8 语义缓存 + 滑动窗口](#38-语义缓存--滑动窗口)
 
 ---
 
@@ -4528,4 +4542,1586 @@ def send_dd_msg(summary):
 
 # 模块三：AI / Agent / RAG
 
-> （待更新）
+> 简历项目一「Agent智能客服」涉及的全部技术栈
+> 核心架构：LangGraph多智能体 + GraphRAG知识检索 + Neo4j图数据库 + FAISS语义缓存
+
+## 3.1 大语言模型（LLM）基础
+
+### 一、什么是大语言模型？
+
+大语言模型（Large Language Model, LLM）是基于Transformer架构的深度学习模型，通过海量文本数据训练，能够理解和生成自然语言。
+
+```
+训练数据（互联网文本、书籍、代码等）
+        ↓
+  Transformer 架构（自注意力机制）
+        ↓
+  学会"预测下一个token"的能力
+        ↓
+  能对话、写代码、回答问题、推理
+```
+
+### 二、常见LLM对比
+
+| 模型 | 厂商 | 特点 | 项目中使用方式 |
+|------|------|------|---------------|
+| DeepSeek-V3 | 深度求索 | 性价比高，中文能力强 | 主要对话模型（deepseek-chat） |
+| DeepSeek-R1 | 深度求索 | 推理能力强（CoT链式思考） | 深度推理（deepseek-r1:32b） |
+| Qwen2.5 | 阿里 | 开源可本地部署 | 本地Ollama运行（qwen2.5:32b） |
+| GPT-4o | OpenAI | 多模态（文本+图像） | 图像理解（vision模型） |
+| BGE-M3 | BAAI | 文本向量化模型 | Embedding语义向量 |
+
+### 三、LLM 的两种使用模式
+
+#### 1. API调用（云端模型）
+
+```python
+from openai import AsyncOpenAI
+
+# DeepSeek API
+client = AsyncOpenAI(
+    api_key="sk-xxx",
+    base_url="https://api.deepseek.com"
+)
+
+# 同步调用
+response = await client.chat.completions.create(
+    model="deepseek-chat",
+    messages=[
+        {"role": "system", "content": "你是一个客服助手"},
+        {"role": "user", "content": "iPhone 15多少钱？"}
+    ],
+    stream=False  # 一次性返回完整响应
+)
+
+# 流式调用（SSE，逐字输出）
+stream = await client.chat.completions.create(
+    model="deepseek-chat",
+    messages=[...],
+    stream=True  # 逐token返回
+)
+
+async for chunk in stream:
+    content = chunk.choices[0].delta.content
+    if content:
+        print(content, end="")  # 实时输出
+```
+
+#### 2. 本地部署（Ollama）
+
+```bash
+# 安装Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 拉取模型
+ollama pull qwen2.5:32b
+ollama pull deepseek-r1:32b
+ollama pull bge-m3
+
+# 运行
+ollama run qwen2.5:32b
+```
+
+```python
+# Python调用Ollama
+import aiohttp, json
+
+async def call_ollama(messages, model="qwen2.5:32b"):
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "http://localhost:11434/api/chat",
+            json={"model": model, "messages": messages, "stream": True}
+        ) as resp:
+            async for line in resp.content:
+                chunk = json.loads(line)
+                if "message" in chunk:
+                    yield chunk["message"]["content"]
+```
+
+|  | API调用 | 本地部署(Ollama) |
+|--|---------|-----------------|
+| 成本 | 按token收费 | 免费（需GPU硬件） |
+| 数据安全 | 数据发到云端 | 数据不出本地 |
+| 延迟 | 网络延迟 | 本地推理延迟 |
+| 模型大小 | 不限 | 受限于显存 |
+
+### 四、项目中的LLM工厂模式
+
+```python
+# llm_factory.py —— 工厂模式切换LLM
+
+class LLMFactory:
+    @staticmethod
+    def create_chat_service():
+        if settings.CHAT_SERVICE == "deepseek":
+            return DeepseekService()       # 调用DeepSeek API
+        else:
+            return OllamaService()         # 调用本地Ollama
+
+    @staticmethod
+    def create_embedding_service():
+        return EmbeddingService()           # BGE-M3 向量化
+
+# 使用
+chat_service = LLMFactory.create_chat_service()
+async for chunk in chat_service.generate_stream(messages):
+    yield chunk
+```
+
+> **面试一句话：** "项目通过工厂模式实现LLM的灵活切换。DeepSeek用于主对话和Agent推理，Ollama用于本地推理和向量化，GPT-4o用于图像理解。.env配置文件控制使用哪个服务。"
+
+### 五、Structured Output（结构化输出）
+
+让LLM返回**指定格式**的数据（而非自由文本），是意图识别的关键技术：
+
+```python
+from langchain_deepseek import ChatDeepSeek
+from typing import Literal, TypedDict
+
+class Router(TypedDict):
+    """意图分类结果——强制LLM返回这个结构"""
+    logic: str                    # 分类的推理过程
+    type: Literal[                # 只能返回这5种之一
+        "general-query",          # 闲聊
+        "additional-query",       # 需要追问
+        "graphrag-query",         # 知识库查询
+        "image-query",            # 图片处理
+        "file-query"              # 文件处理
+    ]
+
+# 使用
+model = ChatDeepSeek(model="deepseek-chat")
+structured_model = model.with_structured_output(Router)
+
+result = await structured_model.ainvoke([
+    {"role": "system", "content": "你是客服，分类用户问题"},
+    {"role": "user", "content": "iPhone 15 Pro多少钱？"}
+])
+# result = {"logic": "用户询问产品价格，需要查知识库", "type": "graphrag-query"}
+```
+
+### 六、面试高频问题
+
+**Q1：什么是LLM？**
+> 大语言模型是基于Transformer架构的AI模型，通过海量文本训练学会"预测下一个token"。它能理解自然语言并生成回复，广泛应用于对话、代码生成、推理等场景。
+
+**Q2：为什么要用Structured Output？**
+> LLM默认返回自由文本，不利于程序处理。Structured Output通过约束解码或JSON Schema，强制LLM返回预定义的数据结构（如Router的type字段），让程序能根据分类结果做路由决策。
+
+**Q3：流式输出(SSE)是什么？为什么用？**
+> Server-Sent Events，服务端逐token推送响应给前端。LLM生成速度慢，如果等全部生成完再返回，用户要等很久。流式输出让用户逐字看到回复，体验更好。
+
+---
+
+## 3.2 RAG 与 GraphRAG
+
+### 一、为什么需要 RAG？
+
+LLM 有两个致命问题：
+1. **知识截止：** 训练数据有时效性（不知道最新的产品价格）
+2. **幻觉：** 会编造不存在的答案
+
+**RAG（Retrieval Augmented Generation，检索增强生成）** 的思路：先从知识库检索相关信息，再把检索结果作为上下文喂给LLM，让LLM基于真实数据回答。
+
+```
+传统LLM：
+  用户问题 → LLM → 回答（可能是编的）
+
+RAG：
+  用户问题 → 检索知识库 → 找到相关文档 → [问题+文档]一起给LLM → 回答（有据可依）
+```
+
+### 二、传统 RAG 流程
+
+```
+┌─────────────── 离线阶段（建索引）──────────────────┐
+│                                                    │
+│  文档 ─→ 分块(Chunking) ─→ Embedding向量化         │
+│                                  ↓                 │
+│                         存入向量数据库(FAISS)       │
+└────────────────────────────────────────────────────┘
+
+┌─────────────── 在线阶段（查询）────────────────────┐
+│                                                    │
+│  用户问题                                          │
+│      ↓                                             │
+│  问题 Embedding（和文档用同一个向量模型）            │
+│      ↓                                             │
+│  向量相似度检索（FAISS Top-K）                      │
+│      ↓                                             │
+│  取出最相关的K个文档块                              │
+│      ↓                                             │
+│  构建 Prompt：[问题 + 检索到的文档]                  │
+│      ↓                                             │
+│  LLM 基于文档生成回答                               │
+└────────────────────────────────────────────────────┘
+```
+
+```python
+# 传统RAG的简单实现
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.vectorstores import FAISS
+
+# 1. 文档分块
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+chunks = splitter.split_documents(documents)
+
+# 2. 向量化并建索引
+embeddings = OllamaEmbeddings(model="bge-m3")
+vectorstore = FAISS.from_documents(chunks, embeddings)
+
+# 3. 检索 + 生成
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+relevant_docs = retriever.invoke("iPhone 15多少钱？")
+
+# 4. 构建prompt给LLM
+prompt = f"""基于以下文档回答问题：
+{relevant_docs}
+
+问题：iPhone 15多少钱？
+"""
+response = llm.invoke(prompt)
+```
+
+### 三、传统 RAG 的局限
+
+| 问题 | 说明 |
+|------|------|
+| **碎片化** | 文档切块后丢失了全局信息，无法回答跨文档的汇总问题 |
+| **无关联** | 不知道实体之间的关系（如"某个供应商的所有产品"） |
+| **全局查询差** | "总结所有用户评价的趋势"这类问题需要看所有数据，Top-K不够 |
+
+### 四、GraphRAG（图检索增强生成）
+
+**GraphRAG** 是微软提出的方案——先从文档中**抽取知识图谱**（实体+关系），再利用图谱的结构化信息进行检索。
+
+#### GraphRAG 的两阶段流程
+
+```
+┌─────────────── 索引阶段 ──────────────────────┐
+│                                                │
+│  原始文档                                      │
+│      ↓                                         │
+│  LLM 抽取实体和关系                             │
+│      ↓                                         │
+│  构建知识图谱（实体为节点，关系为边）             │
+│      ↓                                         │
+│  社区检测（Louvain算法，把图分成社区）           │
+│      ↓                                         │
+│  LLM 生成社区摘要（每个社区的总结）              │
+│      ↓                                         │
+│  存储：图数据 + 社区报告 + 实体/关系表           │
+└────────────────────────────────────────────────┘
+
+┌─────────────── 查询阶段 ──────────────────────┐
+│                                                │
+│  两种查询模式：                                 │
+│                                                │
+│  【Local Search（局部搜索）】                    │
+│  问题 → 提取关键词 → 匹配相关实体               │
+│      → 获取实体的邻居子图 + 相关文本块           │
+│      → LLM 基于子图信息生成回答                  │
+│  适合：具体问题（"iPhone 15的价格？"）           │
+│                                                │
+│  【Global Search（全局搜索）】                   │
+│  问题 → 遍历所有社区摘要                        │
+│      → Map-Reduce：并行总结每个社区               │
+│      → 汇总所有社区回答生成最终答案               │
+│  适合：总结性问题（"所有产品的用户评价趋势？"）   │
+└────────────────────────────────────────────────┘
+```
+
+#### 项目中 GraphRAG 的实现
+
+```python
+# graphrag_query.py —— GraphRAG查询接口
+
+from graphrag.api import local_search, global_search
+
+class GraphRAGAPI:
+    def __init__(self):
+        self.project_dir = settings.GRAPHRAG_PROJECT_DIR
+        self.query_type = settings.GRAPHRAG_QUERY_TYPE  # local/global
+    
+    async def initialize(self):
+        """加载GraphRAG索引数据"""
+        # 加载配置
+        self.config = load_config(Path(self.project_dir))
+        
+        # 加载各类数据表
+        self.entities = await load_table("entities")         # 实体表
+        self.communities = await load_table("communities")   # 社区表
+        self.community_reports = await load_table("community_reports")  # 社区报告
+        self.relationships = await load_table("relationships")  # 关系表
+        self.text_units = await load_table("text_units")     # 文本块表
+    
+    async def query(self, question: str) -> str:
+        """执行GraphRAG查询"""
+        if self.query_type == "local":
+            # 局部搜索：找相关实体的子图
+            response, context = await local_search(
+                config=self.config,
+                entities=self.entities,
+                communities=self.communities,
+                community_reports=self.community_reports,
+                text_units=self.text_units,
+                relationships=self.relationships,
+                community_level=3,              # 社区层级（越高越概括）
+                response_type="text",
+                query=question
+            )
+        elif self.query_type == "global":
+            # 全局搜索：Map-Reduce社区摘要
+            response, context = await global_search(
+                config=self.config,
+                communities=self.communities,
+                community_reports=self.community_reports,
+                community_level=3,
+                query=question
+            )
+        
+        return response
+```
+
+### 五、RAG vs GraphRAG 对比（面试重点）
+
+|  | 传统 RAG | GraphRAG |
+|--|---------|----------|
+| 数据结构 | 文本块(Chunk) | 知识图谱(实体+关系+社区) |
+| 索引方式 | 向量索引(FAISS) | 图索引 + 向量索引 |
+| 检索方式 | 语义相似度Top-K | 实体匹配 + 子图遍历 |
+| 擅长 | 具体事实查询 | 关系推理 + 全局总结 |
+| 成本 | 低（只需向量化） | 高（需LLM抽取实体关系） |
+| 全局理解 | 差（只能看Top-K） | 好（社区摘要覆盖全图） |
+
+> **面试一句话：** "传统RAG通过向量相似度检索文本块，适合具体问题；GraphRAG先构建知识图谱再检索，通过社区摘要实现全局理解，适合关系推理和总结性问题。项目中两者结合使用。"
+
+### 六、面试高频问题
+
+**Q1：什么是RAG？**
+> 检索增强生成。先从知识库检索相关文档，再把文档和问题一起喂给LLM生成回答。解决了LLM的知识截止和幻觉问题。
+
+**Q2：GraphRAG和传统RAG的区别？**
+> 传统RAG用向量检索文本块，只能回答局部问题。GraphRAG先从文档抽取知识图谱（实体+关系），再做社区检测和摘要。查询时可以遍历图谱做关系推理，也可以Map-Reduce社区摘要做全局总结。
+
+**Q3：GraphRAG的Local Search和Global Search的区别？**
+> Local Search提取问题中的实体，在图谱中找到相关子图和文本块，适合具体问题。Global Search遍历所有社区摘要做Map-Reduce汇总，适合全局总结类问题。
+
+---
+
+## 3.3 Neo4j 图数据库
+
+### 一、什么是图数据库？
+
+传统关系型数据库（MySQL）用**表格**存储数据，图数据库用**节点(Node)和关系(Relationship)**存储数据。
+
+```
+关系型数据库（MySQL）：
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│ Product  │     │ Category │     │ Supplier │
+├──────────┤     ├──────────┤     ├──────────┤
+│ id=1     │     │ id=1     │     │ id=1     │
+│ name=iPhone│   │ name=手机│     │ name=苹果 │
+│ cate_id=1 │     └──────────┘     └──────────┘
+│ supp_id=1 │          ↑                ↑
+└──────────┘     外键关联            外键关联
+                 需要JOIN查询        需要JOIN查询
+
+图数据库（Neo4j）：
+(Product: iPhone) ──BELONGS_TO──→ (Category: 手机)
+(Product: iPhone) ──SUPPLIED_BY──→ (Supplier: 苹果)
+(Customer: 张三) ──PLACED──→ (Order: #001) ──CONTAINS──→ (Product: iPhone)
+```
+
+> **面试一句话：** "图数据库用节点和关系直接存储实体间的连接，查询关系型数据不需要JOIN，直接沿边遍历，对多跳查询性能远超关系型数据库。"
+
+### 二、Cypher 查询语言
+
+Neo4j 使用 Cypher 查询语言，语法直观像画图：
+
+```cypher
+// 1. 创建节点
+CREATE (p:Product {name: 'iPhone 15', price: 7999})
+CREATE (c:Category {name: '手机'})
+
+// 2. 创建关系
+MATCH (p:Product {name: 'iPhone 15'}), (c:Category {name: '手机'})
+CREATE (p)-[:BELONGS_TO]->(c)
+
+// 3. 简单查询：iPhone 15属于哪个分类？
+MATCH (p:Product {name: 'iPhone 15'})-[:BELONGS_TO]->(c:Category)
+RETURN c.name
+// 结果：手机
+
+// 4. 多跳查询：张三买了哪些供应商的产品？
+MATCH (cu:Customer {name: '张三'})-[:PLACED]->(o:Order)-[:CONTAINS]->(p:Product)-[:SUPPLIED_BY]->(s:Supplier)
+RETURN DISTINCT s.name
+// 结果：苹果, 三星
+
+// 5. 聚合查询：每个分类有多少产品？
+MATCH (p:Product)-[:BELONGS_TO]->(c:Category)
+RETURN c.name, COUNT(p) as product_count
+ORDER BY product_count DESC
+
+// 6. 条件查询：价格大于5000的手机
+MATCH (p:Product)-[:BELONGS_TO]->(c:Category {name: '手机'})
+WHERE p.price > 5000
+RETURN p.name, p.price
+```
+
+### 三、项目中 Neo4j 的数据模型
+
+```
+节点类型：
+  (Product)      → ProductID, ProductName, UnitPrice, UnitsInStock, QuantityPerUnit
+  (Category)     → CategoryID, CategoryName, Description
+  (Supplier)     → SupplierID, CompanyName, ContactName, Phone
+  (Customer)     → CustomerID, CompanyName, ContactName
+  (Order)        → OrderID, OrderDate
+  (Review)       → ReviewID, ReviewText, Rating, ReviewDate
+
+关系类型：
+  (Product)──BELONGS_TO──→(Category)        产品属于某分类
+  (Product)──SUPPLIED_BY──→(Supplier)       产品由某供应商提供
+  (Order)──CONTAINS──→(Product)             订单包含某产品
+  (Customer)──PLACED──→(Order)              客户下了某订单
+  (Customer)──WROTE──→(Review)              客户写了某评价
+  (Review)──ABOUT──→(Product)               评价关于某产品
+```
+
+### 四、项目中的连接和使用
+
+```python
+# kg_neo4j_conn.py
+from langchain_neo4j import Neo4jGraph
+
+def get_neo4j_graph():
+    """创建Neo4j图连接"""
+    graph = Neo4jGraph(
+        url="bolt://localhost:7687",      # Neo4j bolt协议
+        username="neo4j",
+        password="password",
+        database="neo4j"
+    )
+    return graph
+
+# 使用：执行Cypher查询
+graph = get_neo4j_graph()
+result = graph.query("MATCH (p:Product) WHERE p.UnitPrice > 5000 RETURN p")
+```
+
+### 五、Text2Cypher（自然语言转Cypher）
+
+项目中让LLM把用户问题转成Cypher查询：
+
+```
+用户问题：iPhone 15 Pro多少钱？
+     ↓ LLM转换
+生成Cypher：MATCH (p:Product {ProductName: 'iPhone 15 Pro'}) RETURN p.UnitPrice
+     ↓ 执行
+查询结果：{UnitPrice: 8999}
+     ↓ LLM生成回答
+最终回答：iPhone 15 Pro的价格是8999元。
+```
+
+### 六、Neo4j vs MySQL（面试常考）
+
+|  | MySQL | Neo4j |
+|--|-------|-------|
+| 数据模型 | 表格（行+列） | 图（节点+边） |
+| 关系查询 | JOIN（多表关联） | 直接遍历边 |
+| 多跳查询 | 性能差（N个JOIN） | 性能好（沿边遍历） |
+| 适合场景 | 结构化数据、事务处理 | 关系密集型数据、推荐系统 |
+| 查询语言 | SQL | Cypher |
+| ACID | 支持 | 支持 |
+
+### 七、面试高频问题
+
+**Q1：为什么用Neo4j而不用MySQL存商品关系？**
+> 商品、分类、供应商、订单之间是多对多的复杂关系。MySQL查多跳关系需要多次JOIN，性能随跳数指数下降。Neo4j直接沿边遍历，多跳查询性能稳定。比如"张三买了哪些供应商的产品"，Neo4j一次遍历搞定。
+
+**Q2：Cypher的基本语法？**
+> MATCH匹配模式，WHERE过滤条件，RETURN返回结果，CREATE创建节点/关系。模式用()表示节点、-[]->表示关系。例如`MATCH (p:Product)-[:BELONGS_TO]->(c:Category) RETURN p, c`。
+
+**Q3：什么是Text2Cypher？**
+> 让LLM把自然语言转成Cypher查询。先给LLM展示图数据库的Schema（节点和关系的结构），再让LLM根据用户问题生成对应的Cypher语句，执行后把结果返回给用户。
+
+---
+
+## 3.4 FAISS 向量检索
+
+### 一、什么是向量检索？
+
+**核心思想：** 把文本变成**向量（一串数字）**，语义相近的文本在向量空间中距离也近。
+
+```
+文本 → Embedding模型 → 向量（如768维浮点数）
+                          ↓
+                    向量空间中的点
+
+"iPhone 15多少钱" → [0.12, -0.34, 0.56, ...]
+"苹果手机价格"     → [0.11, -0.33, 0.55, ...]  ← 相似度高（语义接近）
+"今天天气很好"     → [0.87, 0.21, -0.45, ...]  ← 相似度低（语义无关）
+```
+
+**为什么需要向量检索？** 关键词搜索只能匹配字面相同的内容，向量检索能匹配**语义相似**的内容。
+
+### 二、Embedding（文本向量化）
+
+```python
+# 使用Ollama的BGE-M3模型进行文本向量化
+import aiohttp, json
+
+async def get_embedding(text: str, model="bge-m3"):
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            "http://localhost:11434/api/embed",
+            json={"model": model, "input": text}
+        ) as resp:
+            result = await resp.json()
+            return result["embeddings"][0]  # 返回1024维向量
+
+# 示例
+vec = await get_embedding("iPhone 15多少钱")
+# vec = [0.023, -0.147, 0.891, ..., -0.034]  # 1024个浮点数
+```
+
+### 三、FAISS（Facebook AI Similarity Search）
+
+FAISS 是 Meta 开源的高效向量相似度搜索库，专门用于**从海量向量中快速找到最相似的Top-K个**。
+
+```python
+import faiss
+import numpy as np
+
+# 1. 创建索引
+dimension = 1024  # 向量维度（BGE-M3输出1024维）
+index = faiss.IndexFlatIP(dimension)  # 内积索引（等价于余弦相似度，需先归一化）
+
+# 2. 添加向量
+vectors = np.random.random((10000, dimension)).astype('float32')
+faiss.normalize_L2(vectors)  # L2归一化（让内积=余弦相似度）
+index.add(vectors)
+
+# 3. 搜索
+query = np.random.random((1, dimension)).astype('float32')
+faiss.normalize_L2(query)
+scores, indices = index.search(query, k=5)  # 找最相似的5个
+
+print(f"相似度分数: {scores}")     # [[0.98, 0.95, 0.91, 0.88, 0.85]]
+print(f"对应索引: {indices}")      # [[234, 1567, 89, 4523, 789]]
+```
+
+### 四、项目中 FAISS 的两种用途
+
+#### 用途1：RAG 文档检索
+
+```python
+# 传统RAG中的FAISS使用
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import OllamaEmbeddings
+
+embeddings = OllamaEmbeddings(model="bge-m3")
+
+# 建索引
+vectorstore = FAISS.from_documents(documents, embeddings)
+
+# 检索
+results = vectorstore.similarity_search("iPhone 15价格", k=3)
+# 返回最相关的3个文档块
+```
+
+#### 用途2：语义缓存（Semantic Cache）——项目核心创新
+
+```python
+# redis_semantic_cache.py —— FAISS加速的语义缓存
+
+class RedisSemanticCache:
+    """
+    核心思路：用户问过的问题，相似问题直接返回缓存答案
+    
+    架构：
+    - FAISS：内存中快速向量检索（毫秒级）
+    - Redis：持久化存储向量+响应（重启不丢数据）
+    """
+    
+    def __init__(self):
+        self.redis = redis.from_url("redis://localhost:6379")
+        self.faiss_index = None          # FAISS索引（内存）
+        self.id_to_hash = []             # FAISS索引ID → Redis Hash映射
+        self.score_threshold = 0.90      # 相似度阈值
+        self._rebuild_index()            # 启动时从Redis重建FAISS索引
+    
+    def _rebuild_index(self):
+        """启动时从Redis加载所有向量，重建FAISS索引"""
+        all_keys = self.redis.keys("cache:vec:*")
+        vectors, hash_ids = [], []
+        
+        for vec_key in all_keys:
+            raw = self.redis.get(vec_key)
+            vec = np.array(json.loads(raw), dtype=np.float32)
+            vec = self._normalize(vec)     # L2归一化
+            vectors.append(vec)
+            hash_ids.append(vec_key.split(":")[-1])
+        
+        if vectors:
+            dim = len(vectors[0])
+            self.faiss_index = faiss.IndexFlatIP(dim)
+            self.faiss_index.add(np.stack(vectors).astype(np.float32))
+            self.id_to_hash = hash_ids
+    
+    async def lookup(self, messages):
+        """查询缓存：用FAISS找最相似的问题"""
+        user_msg = self._get_last_user_message(messages)
+        
+        # 1. 向量化用户问题
+        query_vec = await self._get_embedding(user_msg)
+        query_vec = self._normalize(np.array(query_vec, dtype=np.float32)).reshape(1, -1)
+        
+        # 2. FAISS搜索Top-1
+        scores, indices = self.faiss_index.search(query_vec, 1)
+        best_score = float(scores[0][0])
+        
+        # 3. 相似度 >= 阈值 → 命中缓存
+        if best_score >= self.score_threshold:
+            hash_id = self.id_to_hash[indices[0][0]]
+            cached = self.redis.get(f"cache:resp:{hash_id}")
+            return cached.decode("utf-8")  # 直接返回缓存的回答
+        
+        return None  # 未命中，需要调LLM
+    
+    async def update(self, messages, response, expire=3600):
+        """更新缓存：新问答对存入Redis+FAISS"""
+        user_msg = self._get_last_user_message(messages)
+        vector = await self._get_embedding(user_msg)
+        
+        hash_id = hashlib.md5(user_msg.encode()).hexdigest()
+        
+        # 存入Redis（向量+响应，设过期时间）
+        self.redis.set(f"cache:vec:{hash_id}", json.dumps(vector), ex=expire)
+        self.redis.set(f"cache:resp:{hash_id}", response.encode("utf-8"), ex=expire)
+        
+        # 同步更新FAISS索引
+        self._add_to_index(np.array(vector, dtype=np.float32), hash_id)
+```
+
+**语义缓存流程图：**
+
+```
+用户问题："iPhone 15 Pro多少钱？"
+        ↓
+  Embedding向量化
+        ↓
+  FAISS检索（毫秒级）
+        ↓
+  找到最相似的问题："苹果15Pro价格多少"（相似度0.95）
+        ↓
+  0.95 >= 0.90（阈值）→ 命中缓存！
+        ↓
+  从Redis取出缓存的回答 → 直接返回（跳过LLM调用）
+  
+  另一种情况：
+  用户问题："推荐一款适合学生的手机"
+        ↓
+  FAISS检索最高相似度 = 0.65 < 0.90 → 未命中
+        ↓
+  正常调LLM → 保存问答对到缓存
+```
+
+### 五、为什么用 FAISS + Redis 混合架构？
+
+|  | 纯Redis | 纯FAISS | FAISS+Redis |
+|--|---------|---------|-------------|
+| 检索速度 | 慢（线性扫描） | 快（索引搜索） | 快 |
+| 持久化 | 支持 | 不支持（内存） | 支持 |
+| 重启恢复 | 天然支持 | 丢失 | 从Redis重建 |
+| 容量 | 受限于内存 | 受限于内存 | Redis可持久化到磁盘 |
+
+### 六、L2归一化的作用
+
+```python
+def _normalize(self, vector):
+    """L2归一化：让向量长度变为1"""
+    norm = np.linalg.norm(vector)  # 计算L2范数（向量长度）
+    if norm == 0:
+        return vector
+    return vector / norm
+
+# 归一化前：vec = [3, 4]          范数 = 5
+# 归一化后：vec = [0.6, 0.8]      范数 = 1
+
+# 为什么归一化？
+# FAISS的IndexFlatIP计算的是内积(Inner Product)
+# 归一化后：内积 = 余弦相似度
+# cos(a, b) = (a·b) / (|a| × |b|)  →  |a|=|b|=1时 → cos(a,b) = a·b
+```
+
+### 七、面试高频问题
+
+**Q1：什么是FAISS？**
+> FAISS是Meta开源的向量相似度搜索库。把文本通过Embedding模型转成向量，FAISS能从百万级向量中毫秒级找到最相似的Top-K。项目里用FAISS做RAG文档检索和语义缓存。
+
+**Q2：语义缓存是什么？怎么实现的？**
+> 语义缓存是根据问题语义（而非关键词）做缓存匹配。实现：用户问题Embedding后用FAISS检索历史问题，如果相似度超过阈值（0.90），直接返回缓存的回答。存储用Redis持久化，检索用FAISS加速。
+
+**Q3：为什么需要L2归一化？**
+> FAISS的IndexFlatIP计算内积，L2归一化让向量长度为1，此时内积等于余弦相似度，值域在[-1,1]，便于用固定阈值（如0.90）判断相似度。
+
+---
+
+## 3.5 LangChain + LangGraph
+
+### 一、LangChain 是什么？
+
+LangChain 是一个**LLM应用开发框架**，提供了模块化的组件来构建LLM应用：
+
+```
+LangChain 核心组件：
+┌──────────────────────────────────────────────┐
+│                                              │
+│  Model I/O        → 统一调用各LLM的接口       │
+│  Retrieval        → 文档加载、切分、检索       │
+│  Chains           → 串联多个步骤的管道         │
+│  Agents           → 让LLM自主决策调用工具      │
+│  Memory           → 管理对话历史               │
+│  Callbacks        → 日志、流式输出等回调       │
+│                                              │
+└──────────────────────────────────────────────┘
+```
+
+```python
+# LangChain 基本用法
+from langchain_deepseek import ChatDeepSeek
+from langchain_core.prompts import ChatPromptTemplate
+
+# 1. 创建LLM实例
+llm = ChatDeepSeek(
+    api_key="sk-xxx",
+    base_url="https://api.deepseek.com",
+    model="deepseek-chat"
+)
+
+# 2. 创建Prompt模板
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "你是一个电商客服"),
+    ("human", "{question}")
+])
+
+# 3. 链式调用（LCEL语法）
+chain = prompt | llm
+
+# 4. 执行
+response = await chain.ainvoke({"question": "iPhone 15多少钱？"})
+print(response.content)
+```
+
+### 二、LangGraph 是什么？为什么要用？
+
+LangChain 的 Chain 是**线性执行**的（A→B→C），但实际业务需要**条件分支、循环、状态管理**：
+
+|  | LangChain Chain | LangGraph |
+|--|----------------|-----------|
+| 执行方式 | 线性A→B→C | 图（有向图，支持分支和循环） |
+| 条件路由 | 不支持 | 支持（conditional_edges） |
+| 状态管理 | 需要手动管理 | 内置State管理 |
+| 循环 | 不支持 | 支持（Agent循环） |
+| 并行 | 不支持 | 支持（Map-Reduce） |
+| 人机交互 | 不支持 | 支持（interrupt+resume） |
+
+**LangGraph = LangChain + 状态图**，用于构建复杂的Agent工作流。
+
+### 三、LangGraph 核心概念
+
+#### 1. State（状态）
+
+```python
+from dataclasses import dataclass, field
+from typing import Annotated
+from langgraph.graph.message import add_messages
+
+@dataclass
+class InputState:
+    """输入状态——用户的输入消息"""
+    messages: Annotated[list, add_messages]   # add_messages：新消息追加而非覆盖
+
+@dataclass
+class AgentState(InputState):
+    """完整状态——Agent处理过程中的所有数据"""
+    router: dict = field(default_factory=dict)   # 意图分类结果
+    steps: list = field(default_factory=list)     # 执行步骤记录
+    question: str = ""                             # 提取的问题
+    answer: str = ""                               # 最终回答
+```
+
+> **add_messages 的作用：** 当新消息到来时，自动追加到messages列表（而不是替换）。这保证了对话历史的完整性。
+
+#### 2. Node（节点）—— 处理函数
+
+```python
+async def analyze_and_route_query(state: AgentState, *, config) -> dict:
+    """节点：意图分类"""
+    model = ChatDeepSeek(model="deepseek-chat")
+    
+    # 用Structured Output让LLM返回分类结果
+    router = await model.with_structured_output(Router).ainvoke(state.messages)
+    
+    # 返回要更新的状态字段（部分更新，不影响其他字段）
+    return {"router": router}
+
+async def respond_to_general_query(state: AgentState, *, config) -> dict:
+    """节点：处理闲聊"""
+    response = await llm.ainvoke(state.messages)
+    return {"answer": response.content, "messages": [response]}
+
+async def create_research_plan(state: AgentState, *, config) -> dict:
+    """节点：调用知识图谱子图"""
+    kg_graph = build_kg_subgraph()
+    result = await kg_graph.ainvoke({"question": state.router["question"]})
+    return {"answer": result["answer"], "messages": [AIMessage(content=result["answer"])]}
+```
+
+#### 3. Edge（边）—— 节点间的连接
+
+```python
+from langgraph.graph import StateGraph, START, END
+
+builder = StateGraph(AgentState, input=InputState)
+
+# 添加节点
+builder.add_node(analyze_and_route_query)
+builder.add_node(respond_to_general_query)
+builder.add_node(get_additional_info)
+builder.add_node("create_research_plan", create_research_plan)
+
+# 固定边：START → 第一个节点
+builder.add_edge(START, "analyze_and_route_query")
+
+# 条件边：根据意图分类结果路由到不同节点
+builder.add_conditional_edges(
+    "analyze_and_route_query",       # 源节点
+    route_query,                     # 路由函数（返回目标节点名）
+    {
+        "respond_to_general_query": "respond_to_general_query",
+        "get_additional_info": "get_additional_info",
+        "create_research_plan": "create_research_plan",
+    }
+)
+
+# 固定边：各节点 → END
+builder.add_edge("respond_to_general_query", END)
+builder.add_edge("get_additional_info", END)
+builder.add_edge("create_research_plan", END)
+```
+
+#### 4. 条件路由函数
+
+```python
+def route_query(state: AgentState) -> str:
+    """根据router.type决定下一步走哪个节点"""
+    query_type = state.router["type"]
+    
+    if query_type == "general-query":
+        return "respond_to_general_query"
+    elif query_type == "additional-query":
+        return "get_additional_info"
+    elif query_type == "graphrag-query":
+        return "create_research_plan"
+    elif query_type == "image-query":
+        return "create_image_query"
+    elif query_type == "file-query":
+        return "create_file_query"
+```
+
+#### 5. Compile & Run
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+# 编译图（checkpointer实现会话持久化）
+graph = builder.compile(checkpointer=MemorySaver())
+
+# 运行
+config = {"configurable": {"thread_id": "conversation_123"}}
+result = await graph.ainvoke(
+    {"messages": [HumanMessage(content="iPhone 15多少钱？")]},
+    config=config
+)
+
+# 流式输出
+async for chunk, metadata in graph.astream(
+    {"messages": [HumanMessage(content="iPhone 15多少钱？")]},
+    config=config,
+    stream_mode="messages"
+):
+    if chunk.content:
+        print(chunk.content, end="")
+```
+
+### 四、完整的主图结构
+
+```
+                    START
+                      │
+                      ↓
+          ┌─── analyze_and_route_query ───┐
+          │       （意图分类节点）           │
+          └──────────┬────────────────────┘
+                     │
+        ┌────────────┼────────────────────────┐
+        ↓            ↓            ↓            ↓
+  general-query  graphrag-query  image-query  additional-query
+        │            │            │            │
+        ↓            ↓            ↓            ↓
+  respond_to_    create_      create_      get_additional
+  general_query  research_    image_query  _info
+                plan(KG子图)
+        │            │            │            │
+        ↓            ↓            ↓            ↓
+       END          END          END          END
+```
+
+### 五、Checkpointer（状态持久化）
+
+```python
+# MemorySaver：内存存储（重启丢失）
+from langgraph.checkpoint.memory import MemorySaver
+checkpointer = MemorySaver()
+
+# SQLite：持久化到文件
+from langgraph.checkpoint.sqlite import SqliteSaver
+checkpointer = SqliteSaver.from_conn_string("checkpoints.db")
+
+# 编译时传入
+graph = builder.compile(checkpointer=checkpointer)
+
+# 通过thread_id区分不同会话
+config = {"configurable": {"thread_id": "user_123_conv_456"}}
+
+# 同一会话的多次调用共享状态
+result1 = await graph.ainvoke({"messages": ["你好"]}, config=config)
+result2 = await graph.ainvoke({"messages": ["iPhone多少钱"]}, config=config)
+# 第二次调用时，state中保留了第一次的对话历史
+```
+
+### 六、面试高频问题
+
+**Q1：LangChain和LangGraph的区别？**
+> LangChain是LLM应用框架，提供模型调用、检索、Chain等组件。LangGraph是基于LangChain的状态图框架，支持条件分支、循环、并行执行，适合构建复杂的Agent工作流。简单链用LangChain，复杂Agent用LangGraph。
+
+**Q2：LangGraph的State、Node、Edge分别是什么？**
+> State是贯穿整个工作流的数据结构，Node是处理函数（接收State返回状态更新），Edge定义节点间的连接（固定边或条件边）。流程是START→Node→...→END。
+
+**Q3：LangGraph怎么做会话持久化？**
+> 用Checkpointer。编译图时传入checkpointer（MemorySaver内存存储或SqliteSaver持久化），运行时通过configurable.thread_id区分不同会话，同一thread_id的多次调用共享状态历史。
+
+---
+
+## 3.6 Multi-Agent 多智能体架构
+
+### 一、什么是 Multi-Agent？
+
+把一个复杂的AI任务**拆分给多个专职Agent**，每个Agent只负责自己擅长的部分，通过协作完成整体任务。
+
+```
+单Agent：
+  用户问题 → 一个大Agent包揽一切（容易出错、效率低）
+
+Multi-Agent：
+  用户问题 → 路由Agent（分类）
+               → 闲聊Agent（处理闲聊）
+               → 知识库Agent（查询知识）
+                    → 规划Agent（拆分子任务）
+                    → 工具选择Agent（选合适工具）
+                         → Cypher Agent（查Neo4j）
+                         → GraphRAG Agent（查文档）
+                    → 总结Agent（汇总结果）
+                    → 回答Agent（生成最终答案）
+```
+
+### 二、项目中 Multi-Agent 的层级设计
+
+```
+第一层：主Agent（lg_builder.py）
+├── 意图路由：classify user query
+│
+├── 闲聊Agent：respond_to_general_query
+│   └── 直接用LLM回答
+│
+├── 追问Agent：get_additional_info
+│   └── 提示用户补充信息
+│
+├── 图片Agent：create_image_query
+│   └── 调用GPT-4o分析图片
+│
+└── 知识图谱子图（kg_sub_graph/）  ← 第二层：子Agent系统
+    │
+    ├── 护栏Agent（Guardrails）
+    │   └── 判断问题是否在业务范围内
+    │
+    ├── 规划Agent（Planner）
+    │   └── 把复杂问题拆成子任务
+    │
+    ├── 工具选择Agent（Tool Selection）× N（并行）
+    │   ├── Cypher查询Agent → Neo4j
+    │   ├── 预定义查询Agent → 预写好的Cypher
+    │   └── GraphRAG Agent → 微软GraphRAG
+    │
+    ├── 总结Agent（Summarize）
+    │   └── 汇总多个工具的结果
+    │
+    └── 最终回答Agent（Final Answer）
+        └── 生成用户友好的回答
+```
+
+### 三、子图（Sub-Graph）实现
+
+知识图谱子图本身也是一个完整的 StateGraph，嵌套在主图内部：
+
+```python
+# kg_builder.py —— 知识图谱子图构建
+
+def build_kg_subgraph():
+    """构建知识图谱子图"""
+    builder = StateGraph(OverallState, input=InputState, output=OutputState)
+    
+    # 添加所有子Agent节点
+    builder.add_node("guardrails", create_guardrails_node(llm, graph))
+    builder.add_node("planner", create_planner_node(llm))
+    builder.add_node("cypher_query", create_cypher_query_node())
+    builder.add_node("predefined_cypher", create_predefined_cypher_node(graph))
+    builder.add_node("customer_tools", create_graphrag_query_node())
+    builder.add_node("tool_selection", create_tool_selection_node(llm))
+    builder.add_node("summarize", create_summarization_node(llm))
+    builder.add_node("final_answer", create_final_answer_node())
+    
+    # 边
+    builder.add_edge(START, "guardrails")
+    builder.add_conditional_edges("guardrails", guardrails_conditional_edge)
+    builder.add_conditional_edges("planner", map_reduce_planner_to_tool_selection)
+    builder.add_edge("cypher_query", "summarize")
+    builder.add_edge("predefined_cypher", "summarize")
+    builder.add_edge("customer_tools", "summarize")
+    builder.add_edge("summarize", "final_answer")
+    builder.add_edge("final_answer", END)
+    
+    return builder.compile()
+```
+
+**子图内部流程：**
+
+```
+START → Guardrails（业务范围检查）
+           │
+     ┌─────┴─────┐
+     ↓           ↓
+  超出范围    在范围内
+     │           │
+     ↓           ↓
+  Final      Planner（任务拆分）
+  Answer         │
+                 ↓
+          Map-Reduce并行 ← 关键！
+          ┌──────┼──────┐
+          ↓      ↓      ↓
+      tool_   tool_   tool_
+      select  select  select
+       │      │       │
+       ↓      ↓       ↓
+    Cypher  Predef  GraphRAG
+       │      │       │
+       └──────┼───────┘
+              ↓
+         Summarize（汇总）
+              ↓
+        Final Answer → END
+```
+
+### 四、各子Agent的职责
+
+#### 1. 护栏Agent（Guardrails）—— 安全校验
+
+```python
+async def guardrails(state):
+    """检查用户问题是否在业务范围内"""
+    # 用LLM判断
+    prompt = f"""判断以下问题是否与电商业务相关：
+    问题：{state["question"]}
+    只能回答：continue（继续）或 end（结束）"""
+    
+    result = await llm.with_structured_output(GuardrailsOutput).ainvoke(prompt)
+    
+    if result.decision == "continue":
+        return {"next_action": "planner"}     # 进入规划
+    else:
+        return {"next_action": "final_answer"}  # 直接回答"无法处理"
+```
+
+#### 2. 规划Agent（Planner）—— 任务拆分
+
+```python
+async def planner(state):
+    """把复杂问题拆成多个子任务"""
+    prompt = f"""把用户问题拆分成可以并行查询的子任务。
+    例如："iPhone 15和Samsung S24哪个好" 可以拆成：
+    - 查询iPhone 15的信息
+    - 查询Samsung S24的信息"""
+    
+    result = await llm.with_structured_output(PlannerOutput).ainvoke({
+        "question": state["question"]
+    })
+    
+    return {"tasks": result.tasks}
+    # tasks = [
+    #   Task(question="iPhone 15的价格、配置、评价", parent_task="compare"),
+    #   Task(question="Samsung S24的价格、配置、评价", parent_task="compare")
+    # ]
+```
+
+#### 3. 工具选择Agent（Tool Selection）—— 为每个子任务选工具
+
+```python
+async def tool_selection(state):
+    """为每个子任务选择最合适的查询工具"""
+    question = state["question"]
+    
+    # LLM决定用哪个工具
+    result = await tool_chain.ainvoke({"question": question})
+    
+    # 根据选择的工具路由到对应节点
+    if result.tool == "text2cypher":
+        return Command(goto="cypher_query")        # 动态生成Cypher
+    elif result.tool == "predefined_cypher":
+        return Command(goto="predefined_cypher")    # 用预定义查询
+    elif result.tool == "graphrag":
+        return Command(goto="customer_tools")       # 用GraphRAG查文档
+```
+
+#### 4. 总结Agent（Summarize）—— 汇总多工具结果
+
+```python
+async def summarize(state):
+    """汇总所有工具的查询结果"""
+    results = [c.get("records") for c in state.get("cyphers", []) if c.get("records")]
+    
+    if results:
+        summary = await llm.ainvoke(
+            f"基于以下查询结果，简洁回答用户问题：\n"
+            f"问题：{state['question']}\n"
+            f"查询结果：{results}"
+        )
+        return {"summary": summary.content}
+    return {"summary": "未找到相关数据。"}
+```
+
+### 五、面试高频问题
+
+**Q1：为什么要用Multi-Agent而不是一个大Agent？**
+> 1. 职责分离：每个Agent只做一件事，Prompt更精准，准确率更高 2. 并行执行：多个子任务可以并行处理，效率更高 3. 可维护性：单个Agent出问题只影响局部 4. 可扩展性：新增功能只需添加新Agent。
+
+**Q2：子图（Sub-Graph）是什么？**
+> 子图是嵌套在主图内部的完整StateGraph。主图负责意图路由，子图（如知识图谱子图）内部有自己独立的节点、边和状态管理。子图对主图来说是黑盒——主图只需调用它获取结果。
+
+**Q3：护栏Agent（Guardrails）的作用？**
+> 在正式处理前做安全检查，判断用户问题是否在业务范围内。超出范围的问题直接返回拒绝回答，避免触发不必要的LLM调用和知识库查询，节省成本的同时防止越界。
+
+---
+
+## 3.7 意图识别 + Map-Reduce 并行
+
+### 一、意图识别（Intent Recognition）
+
+意图识别是主Agent的第一步——**判断用户想干什么**，然后路由到对应的处理节点。
+
+#### 项目中的意图分类
+
+```python
+class Router(TypedDict):
+    """LLM返回的意图分类结果"""
+    logic: str    # LLM的推理过程（为什么这样分类）
+    type: Literal[
+        "general-query",    # 闲聊："你好"、"讲个笑话"
+        "additional-query", # 需要追问："我想买手机"（买哪个？预算？）
+        "graphrag-query",   # 知识库查询："iPhone 15多少钱"
+        "image-query",      # 图片处理：用户上传了图片
+        "file-query"        # 文件处理：用户上传了文件
+    ]
+```
+
+#### 意图识别的Prompt设计
+
+```python
+ROUTER_SYSTEM_PROMPT = """你是电商智能客服，请将用户问题分类：
+
+## general-query
+与电商业务无关的闲聊、日常对话
+
+## additional-query
+用户想咨询但缺少关键信息（没说具体型号、没给订单号、问题描述不清）
+
+## graphrag-query
+可以通过查询知识库回答的问题：
+- 产品价格、库存、规格参数
+- 订单状态、物流查询
+- 会员积分、促销活动
+- 退换货政策
+- 产品使用指南
+
+## image-query
+用户上传了图片需要分析
+
+## file-query
+用户上传了文件需要处理
+"""
+```
+
+#### 实际分类示例
+
+| 用户输入 | 分类 | 原因 |
+|----------|------|------|
+| "你好" | general-query | 闲聊 |
+| "iPhone 15 Pro Max 256G多少钱" | graphrag-query | 查产品价格 |
+| "我的订单到哪了" | additional-query | 缺少订单号 |
+| "订单号12345到哪了" | graphrag-query | 查物流 |
+| "这两种手机哪个好" | additional-query | 没说哪两种 |
+| "iPhone和Samsung哪个拍照好" | graphrag-query | 可查知识库对比 |
+
+> **面试一句话：** "意图识别用LLM的Structured Output能力，通过Router TypedDict约束LLM返回预定义的5种意图类型。系统Prompt定义每种意图的特征和判断标准，确保分类准确。"
+
+### 二、Map-Reduce 并行工具调用
+
+#### 什么是 Map-Reduce？
+
+```
+Map阶段：把一个复杂任务拆成多个独立子任务，并行处理
+Reduce阶段：汇总所有子任务的结果
+
+用户："对比iPhone 15和Samsung S24的配置和价格"
+           ↓
+    Planner拆分任务：
+    ├── Task1: "查询iPhone 15的配置和价格"
+    ├── Task2: "查询Samsung S24的配置和价格"
+    └── Task3: "查询两款手机的用户评价"
+           ↓
+    Map阶段（并行执行）：
+    ┌── Task1 → Tool Select → Cypher Agent → 结果1 ─┐
+    ├── Task2 → Tool Select → Cypher Agent → 结果2 ─┤
+    └── Task3 → Tool Select → GraphRAG Agent → 结果3─┤
+                                                      ↓
+    Reduce阶段（汇总）：
+    Summarize Agent 把结果1+2+3 综合生成对比报告
+```
+
+#### LangGraph 中的 Map-Reduce 实现
+
+```python
+from langgraph.types import Send
+
+def map_reduce_planner_to_tool_selection(state: OverallState) -> list[Send]:
+    """
+    Map阶段的关键函数：
+    Planner产出了多个Task，每个Task发送一个tool_selection实例
+    
+    Send的作用：创建节点的多个并行实例
+    - 同一个"tool_selection"节点，每个Task一个实例
+    - LangGraph自动并行执行所有实例
+    """
+    return [
+        Send(
+            "tool_selection",    # 目标节点名
+            {                    # 传给该实例的输入状态
+                "question": task.question,
+                "parent_task": task.parent_task,
+            }
+        )
+        for task in state.get("tasks", [])
+    ]
+
+# 在图中使用
+builder.add_conditional_edges(
+    "planner",                            # 源节点
+    map_reduce_planner_to_tool_selection, # Map函数
+    ["tool_selection"]                    # 目标节点（可以并行多个实例）
+)
+```
+
+#### 完整流程图解
+
+```
+用户："iPhone 15和Samsung S24的价格和评价"
+    ↓
+Guardrails → 在范围内 ✓
+    ↓
+Planner → 拆成3个Task：
+    Task1: "iPhone 15价格"
+    Task2: "Samsung S24价格"  
+    Task3: "两款手机评价"
+    ↓
+Map阶段（Send并行分发）：
+    ┌─ Send("tool_selection", {question: "iPhone 15价格"}) ──→ Cypher查询
+    ├─ Send("tool_selection", {question: "Samsung S24价格"}) ─→ Cypher查询
+    └─ Send("tool_selection", {question: "两款手机评价"}) ──→ GraphRAG查询
+    ↓ （三个工具并行执行）
+    ↓
+Reduce阶段（Summarize）：
+    汇总三条结果：
+    - iPhone 15 Pro: ¥8999
+    - Samsung S24: ¥6999
+    - 评价：iPhone拍照更自然，Samsung夜景更强
+    ↓
+Final Answer → "iPhone 15 Pro售价8999元，Samsung S24售价6999元..."
+```
+
+### 三、Send 的本质（面试可能深问）
+
+```python
+# Send 是 LangGraph 的特殊对象，实现并行
+from langgraph.types import Send
+
+# 普通边：一个节点只能有一个输出
+builder.add_edge("A", "B")  # A完成后去B（只有一个）
+
+# 条件边：一个节点输出到多个目标之一
+builder.add_conditional_edges("A", route_func, {"B": "B", "C": "C"})
+# A完成后去B或C（只能选一个）
+
+# Send：一个节点输出到同一目标的多个实例
+def map_func(state):
+    return [Send("B", {"task": t}) for t in state.tasks]
+# A完成后，创建N个B的实例，并行执行
+```
+
+### 四、面试高频问题
+
+**Q1：意图识别怎么实现的？**
+> 用LLM的Structured Output功能。定义Router TypedDict（包含logic和type字段），系统Prompt描述每种意图的特征。LLM分析用户问题后返回结构化的分类结果，程序根据type字段路由到对应处理节点。
+
+**Q2：Map-Reduce在Agent中怎么用的？**
+> Planner Agent把复杂问题拆成多个子任务，每个子任务通过Send对象分发到tool_selection节点的独立实例，LangGraph自动并行执行。所有工具完成后，Summarize Agent汇总结果生成最终回答。
+
+**Q3：Send和普通边有什么区别？**
+> 普通边是一个节点执行完跳到下一个节点（一对一）。Send可以创建同一节点的多个实例并行执行（一对多），每个实例有独立的输入状态。这是LangGraph实现Map-Reduce的关键机制。
+
+---
+
+## 3.8 语义缓存 + 滑动窗口
+
+### 一、语义缓存（Semantic Cache）
+
+#### 为什么需要缓存？
+
+```
+没有缓存：
+  用户A问"iPhone 15多少钱" → LLM处理（耗时2秒，花费￥0.01）
+  用户B问"苹果15什么价格" → LLM处理（耗时2秒，花费￥0.01）
+  用户C问"iPhone 15 Pro售价多少" → LLM处理（耗时2秒，花费￥0.01）
+  → 三个问题语义相同，但每次都调LLM，浪费钱和时间
+
+有缓存：
+  用户A问"iPhone 15多少钱" → LLM处理 → 缓存
+  用户B问"苹果15什么价格" → FAISS检索 → 相似度0.96 → 命中缓存！瞬间返回
+  用户C问"iPhone 15 Pro售价多少" → FAISS检索 → 相似度0.92 → 命中缓存！瞬间返回
+```
+
+#### 缓存命中判断标准
+
+```python
+# 核心参数
+SCORE_THRESHOLD = 0.90   # 相似度阈值（0-1）
+
+# 判断逻辑
+if similarity_score >= 0.90:
+    return cached_response    # 命中：直接返回缓存
+else:
+    call_llm_and_cache()      # 未命中：调LLM并存入缓存
+```
+
+**为什么不用精确匹配？** 因为同一意图的表达方式千变万化："iPhone 15多少钱"、"苹果15什么价格"、"15pro售价"都是问价格，关键词匹配搞不定，必须用语义相似度。
+
+#### 缓存存储结构
+
+```
+Redis 中的数据：
+
+Key: cache:vec:{md5(原始问题)}     Value: [0.023, -0.147, ...]  # 向量（JSON）
+Key: cache:resp:{md5(原始问题)}    Value: "iPhone 15售价7999元"  # 缓存回答
+Key: cache:meta:{md5(原始问题)}    Value: {                      # 元数据
+    "created_at": 1719000000,
+    "last_access": 1719003600,
+    "access_count": 5
+}
+
+FAISS 索引（内存）：
+  IndexFlatIP(1024维)  # 内积索引
+  包含所有向量 → 快速检索
+```
+
+#### 自动清理机制
+
+```python
+async def _auto_cleanup(self):
+    """后台任务：缓存超过最大数量时自动清理"""
+    while True:
+        all_keys = self.redis.keys("cache:meta:*")
+        
+        if len(all_keys) > self.max_cache_size:
+            # 按最后访问时间排序
+            items = [(k, json.loads(self.redis.get(k))["last_access"]) for k in all_keys]
+            items.sort(key=lambda x: x[1])  # 最旧的排前面
+            
+            # 删除最旧的条目
+            for key, _ in items[:len(all_keys) - self.max_cache_size]:
+                hash_id = key.split(":")[-1]
+                self.redis.delete(f"cache:vec:{hash_id}")
+                self.redis.delete(f"cache:resp:{hash_id}")
+                self.redis.delete(f"cache:meta:{hash_id}")
+            
+            # 重建FAISS索引
+            self._rebuild_index()
+        
+        await asyncio.sleep(self.cleanup_interval)
+```
+
+### 二、滑动窗口（Sliding Window）
+
+#### 为什么需要滑动窗口？
+
+LLM的输入有**token长度限制**，而且按token收费。对话越长，发送的历史消息越多：
+
+```
+第1轮对话：1条历史 → 发送1条
+第10轮对话：10条历史 → 发送10条
+第50轮对话：50条历史 → 发送50条 ← Token爆炸！又贵又慢！
+```
+
+**滑动窗口：** 只保留**最近N轮**对话历史，丢弃更早的消息。
+
+#### 项目中的实现
+
+```python
+# message_utils.py
+
+def sliding_window_messages(
+    messages: list[dict],
+    max_rounds: int = 10,           # 保留最近10轮
+    max_chars_per_msg: int = 2000,  # 每条消息最多2000字符
+) -> list[dict]:
+    """对对话历史应用滑动窗口"""
+    
+    if not messages:
+        return messages
+    
+    # 1. 分离系统消息和对话消息
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    dialog_msgs = [m for m in messages if m["role"] != "system"]
+    
+    # 2. 统计当前对话轮数（一个"用户消息+AI回复"=一轮）
+    dialog_rounds = sum(1 for m in dialog_msgs if m["role"] == "user")
+    
+    # 3. 如果没超过窗口大小，只截断过长的消息
+    if dialog_rounds <= max_rounds:
+        return system_msgs + [_truncate(m, max_chars_per_msg) for m in dialog_msgs]
+    
+    # 4. 超过了：只保留最近max_rounds轮
+    kept = _keep_last_rounds(dialog_msgs, max_rounds)
+    
+    return system_msgs + [_truncate(m, max_chars_per_msg) for m in kept]
+
+
+def _keep_last_rounds(dialog_msgs: list[dict], max_rounds: int) -> list[dict]:
+    """保留最后N轮对话"""
+    user_count = 0
+    cut_idx = 0
+    
+    # 从后往前数，找到第max_rounds轮的起始位置
+    for i in range(len(dialog_msgs) - 1, -1, -1):
+        if dialog_msgs[i]["role"] == "user":
+            user_count += 1
+            if user_count == max_rounds:
+                cut_idx = i
+                break
+    
+    return dialog_msgs[cut_idx:]  # 返回最后N轮
+
+
+def _truncate(msg: dict, max_chars: int) -> dict:
+    """截断过长的单条消息"""
+    if len(msg.get("content", "")) > max_chars:
+        return {**msg, "content": msg["content"][:max_chars] + "...[已截断]"}
+    return msg
+```
+
+#### 滑动窗口效果
+
+```
+原始对话（50轮，约30000 tokens）：
+┌──────────────────────────────────────────────────┐
+│ Round 1-40: 早期对话（已经不相关了）               │  ← 丢弃
+├──────────────────────────────────────────────────┤
+│ Round 41-50: 最近10轮对话                         │  ← 保留
+└──────────────────────────────────────────────────┘
+
+应用滑动窗口后（10轮，约6000 tokens）：
+┌──────────────────────────────────────────────────┐
+│ [System Prompt]                                   │ ← 始终保留
+│ Round 41: ...                                     │
+│ Round 42: ...                                     │
+│ ...                                               │
+│ Round 50: ...                                     │ ← 最近10轮
+└──────────────────────────────────────────────────┘
+
+Token减少：30000 → 6000（减少80%）
+费用减少：$0.0084 → $0.00084（减少90%）
+```
+
+### 三、完整请求处理流程（结合缓存+窗口）
+
+```
+用户发送消息
+    │
+    ↓
+① 滑动窗口裁剪对话历史（保留最近10轮）
+    │
+    ↓
+② 语义缓存查询（FAISS检索相似问题）
+    │
+    ├── 命中（相似度 ≥ 0.90）→ 直接返回缓存回答（跳过LLM）
+    │
+    └── 未命中
+         │
+         ↓
+    ③ LangGraph Agent处理
+         ├── 意图识别
+         ├── 路由到对应Agent
+         ├── 知识库查询（Neo4j/GraphRAG）
+         └── 生成回答
+         │
+         ↓
+    ④ 更新语义缓存（存入Redis+FAISS）
+         │
+         ↓
+    ⑤ 返回回答给用户（SSE流式输出）
+```
+
+### 四、性能优化效果
+
+| 优化手段 | 效果 | 适用场景 |
+|----------|------|----------|
+| 语义缓存 | 相似问题秒回，LLM调用减少90% | 重复/相似问题（客服场景极常见） |
+| 滑动窗口 | Token减少80-90%，费用降低90% | 长对话场景 |
+| Map-Reduce并行 | 多子任务并行，响应时间减少50%+ | 复杂对比/汇总查询 |
+| 流式输出 | 首字响应时间<1秒 | 所有场景 |
+
+### 五、面试高频问题
+
+**Q1：语义缓存和普通缓存有什么区别？**
+> 普通缓存用key精确匹配（"iPhone 15多少钱"只匹配这个字符串）。语义缓存用向量相似度匹配，"苹果15什么价格"和"iPhone 15多少钱"语义相同，相似度0.96，也能命中缓存。实现方式是FAISS向量检索+Redis持久化。
+
+**Q2：滑动窗口为什么能节省Token？**
+> LLM每次调用都要发送完整的对话历史，对话越长token越多。滑动窗口只保留最近N轮（项目默认10轮），丢弃更早的历史。系统Prompt始终保留。实测50轮对话可减少80% token。
+
+**Q3：相似度阈值（0.90）怎么定的？**
+> 经验值。太低（如0.70）会导致语义不同的问题也命中缓存（误答），太高（如0.98）会导致几乎无法命中（缓存利用率低）。0.90在客服场景下是精度和命中率的平衡点，可以通过A/B测试调整。
+
+**Q4：整个系统的请求处理流程是什么？**
+> 用户消息 → 滑动窗口裁剪历史 → 语义缓存查找（命中则直接返回）→ LangGraph Agent（意图识别→路由→知识库查询→生成回答）→ 更新缓存 → SSE流式返回。关键优化点：缓存避免重复LLM调用，窗口控制Token消耗，Map-Reduce并行加速复杂查询。
