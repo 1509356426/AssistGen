@@ -2300,18 +2300,18 @@ orderService.addListener(new PointsService());
 
 ```java
 interface PaymentStrategy { void pay(double amount); }
-class AlipayStrategy implements PaymentStrategy { public void pay(double a) { /* 支付宝 */ } }
-class WechatPayStrategy implements PaymentStrategy { public void pay(double a) { /* 微信 */ } }
+class AlipayStrategy implements PaymentStrategy { public void pay(double a) { /* 支付宝具体支付逻辑 */ } }
+class WechatPayStrategy implements PaymentStrategy { public void pay(double a) { /* 微信具体支付逻辑 */ } }
 
 class PaymentContext {
-    private PaymentStrategy strategy;
-    void setStrategy(PaymentStrategy s) { this.strategy = s; }
-    void pay(double amount) { strategy.pay(amount); }
+    private PaymentStrategy strategy; // 当前使用的支付方式
+    void setStrategy(PaymentStrategy s) { this.strategy = s; } // 可以随时切换支付方式
+    void pay(double amount) { strategy.pay(amount); } // 委托给具体的支付方式去执行
 }
 
 // 运行时切换策略
-ctx.setStrategy(new AlipayStrategy());  ctx.pay(100);
-ctx.setStrategy(new WechatPayStrategy()); ctx.pay(200);  // 切换！
+ctx.setStrategy(new AlipayStrategy());  ctx.pay(100); // 输出：用支付宝支付100元
+ctx.setStrategy(new WechatPayStrategy()); ctx.pay(200);  // 切换！ 输出：用微信支付200元
 // 新增支付方式？只新增一个策略类，不改已有代码
 ```
 
