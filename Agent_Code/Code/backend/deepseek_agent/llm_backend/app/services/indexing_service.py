@@ -1,8 +1,6 @@
 import os
-import asyncio
-import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import mimetypes
 import shutil
 import uuid
@@ -11,8 +9,6 @@ import graphrag.api as api
 from graphrag.config.load_config import load_config
 from graphrag.config.enums import IndexingMethod
 from graphrag.logger.rich_progress import RichProgressLogger
-from graphrag.index.typing.pipeline_run_result import PipelineRunResult
-
 from app.core.config import settings
 from app.core.logger import get_logger
 
@@ -20,13 +16,35 @@ logger = get_logger(service="indexing")
 
 class IndexingService:
     def __init__(self):
-        self.project_dir = settings.GRAPHRAG_PROJECT_DIR
+        self.project_dir = self._resolve_project_dir(settings.GRAPHRAG_PROJECT_DIR)
         self.data_dir_name = settings.GRAPHRAG_DATA_DIR
         self.data_dir = os.path.join(self.project_dir, self.data_dir_name)
-        
-
-        # 默认配置文件
         self.default_config = 'settings.yaml'
+        self.config_mapping = {
+            "application/pdf": self.default_config,
+            "text/plain": self.default_config,
+            "text/markdown": self.default_config,
+            "application/msword": self.default_config,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": self.default_config,
+        }
+
+    def _resolve_project_dir(self, configured_dir: str) -> str:
+        """解析 GraphRAG 项目目录，避免运行目录变化导致相对路径失效"""
+        path = Path(configured_dir)
+        if path.is_absolute():
+            return str(path)
+
+        candidates = [
+            Path.cwd() / path,
+            Path(__file__).resolve().parents[2] / path,
+            Path(__file__).resolve().parents[3] / path,
+        ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+
+        return str(candidates[0])
         
     def _get_file_type(self, file_path: str) -> str:
         """获取文件MIME类型"""
