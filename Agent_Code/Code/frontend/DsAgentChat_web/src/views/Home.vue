@@ -130,7 +130,7 @@
                   </button>
                 </div>
                 <div class="right-buttons">
-                  <button class="tool-btn" @click="$refs.fileInput?.click()">
+                  <button class="tool-btn" @click="fileInput?.click()">
                     <div class="icon">📎</div>
                   </button>
                   <button 
@@ -244,7 +244,7 @@
                     </button>
                   </div>
                   <div class="right-buttons">
-                    <button class="tool-btn" @click="$refs.fileInput?.click()">
+                    <button class="tool-btn" @click="fileInput?.click()">
                       <div class="icon">📎</div>
                     </button>
                     <button 
@@ -997,7 +997,7 @@ const handleFileUpload = async (event: Event) => {
     }
     
     try {
-      const response = await fetch('http://localhost:8000/api/upload', {
+      const response = await fetch(ApiService.buildUrl('/api/upload'), {
         method: 'POST',
         body: formData
       })
@@ -1326,7 +1326,7 @@ const sendPopupMessage = async () => {
     }
     
     // 调用LangGraph接口
-    const response = await fetch('http://localhost:8000/api/langgraph/query', {
+    const response = await fetch(ApiService.buildUrl('/api/langgraph/query'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

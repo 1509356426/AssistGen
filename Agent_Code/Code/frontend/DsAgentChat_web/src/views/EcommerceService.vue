@@ -256,6 +256,7 @@ import axios from 'axios'
 
 const router = useRouter()
 const md = new MarkdownIt()
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 const messagesContainer = ref<HTMLElement | null>(null)
 const userInput = ref('')
 const searchInput = ref('')
@@ -391,7 +392,7 @@ const sendMessage = async () => {
     }
     
     // 调用API
-    const response = await fetch('http://localhost:8000/api/langgraph/query', {
+    const response = await fetch(`${API_BASE_URL}/api/langgraph/query`, {
       method: 'POST',
       body: formData
     })
@@ -565,7 +566,7 @@ const handleImageUpload = async (event: Event) => {
     }
 
     // 调用API
-    const response = await fetch('http://localhost:8000/api/langgraph/query', {
+    const response = await fetch(`${API_BASE_URL}/api/langgraph/query`, {
       method: 'POST',
       body: formData
     })
