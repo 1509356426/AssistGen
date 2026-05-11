@@ -19,6 +19,7 @@ from app.models.conversation import Conversation, DialogueType
 from app.models.message import Message
 from sqlalchemy import select
 from app.services.conversation_service import ConversationService
+from app.services.rag_chat_service import RAGChatService
 import uuid
 import os
 from app.services.indexing_service import IndexingService
@@ -231,7 +232,8 @@ async def rag_chat_endpoint(request: RAGChatRequest):
         return StreamingResponse(
             rag_chat_service.generate_stream(
                 request.messages,
-                request.index_id
+                request.index_id,
+                request.user_id
             ),
             media_type="text/event-stream"
         )
