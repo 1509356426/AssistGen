@@ -43,7 +43,11 @@ export interface Message {
 }
 
 export class ApiService {
-  private static baseUrl = import.meta.env.VITE_API_BASE_URL
+  static baseUrl = import.meta.env.VITE_API_BASE_URL || ''
+
+  static buildUrl(path: string) {
+    return `${this.baseUrl}${path}`
+  }
 
   // 处理聊天消息流
   static async handleChatStream(reader: ReadableStreamDefaultReader<Uint8Array>, 
@@ -141,7 +145,7 @@ export class ApiService {
 
   // 创建新会话
   static async createConversation(): Promise<number> {
-    const response = await fetch(`${this.baseUrl}/api/conversations`, {
+    const response = await fetch(this.buildUrl('/api/conversations'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -166,7 +170,7 @@ export class ApiService {
       throw new Error('Missing conversation_id')
     }
 
-    const response = await fetch(`${this.baseUrl}/api/chat`, {
+    const response = await fetch(this.buildUrl('/api/chat'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -192,7 +196,7 @@ export class ApiService {
       throw new Error('Missing conversation_id')
     }
 
-    const response = await fetch(`${this.baseUrl}/api/reason`, {
+    const response = await fetch(this.buildUrl('/api/reason'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -218,7 +222,7 @@ export class ApiService {
       throw new Error('Missing conversation_id')
     }
 
-    const response = await fetch(`${this.baseUrl}/api/search`, {
+    const response = await fetch(this.buildUrl('/api/search'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -240,7 +244,7 @@ export class ApiService {
 
   // 获取用户的所有会话
   static async getUserConversations(userId: string): Promise<Conversation[]> {
-    const response = await fetch(`${this.baseUrl}/api/conversations/user/${userId}`, {
+    const response = await fetch(this.buildUrl(`/api/conversations/user/${userId}`), {
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('token')}`
       }
@@ -256,7 +260,7 @@ export class ApiService {
   // 获取特定会话的所有消息
   static async getConversationMessages(conversationId: number): Promise<Message[]> {
     const userId = localStorage.getItem('user_id')
-    const response = await fetch(`${this.baseUrl}/api/conversations/${conversationId}/messages?user_id=${userId}`, {
+    const response = await fetch(this.buildUrl(`/api/conversations/${conversationId}/messages?user_id=${userId}`), {
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('token')}`
       }
@@ -271,7 +275,7 @@ export class ApiService {
 
   // 删除会话
   static async deleteConversation(conversationId: number): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/conversations/${conversationId}`, {
+    const response = await fetch(this.buildUrl(`/api/conversations/${conversationId}`), {
       method: 'DELETE',
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -285,7 +289,7 @@ export class ApiService {
 
   // 更新会话名称
   static async updateConversationName(conversationId: number, name: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/conversations/${conversationId}/name`, {
+    const response = await fetch(this.buildUrl(`/api/conversations/${conversationId}/name`), {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
