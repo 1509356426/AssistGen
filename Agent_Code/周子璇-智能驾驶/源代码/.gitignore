@@ -1,0 +1,33 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Runtime logs and temporary outputs
+runs/
+outputs/smoke/
+
+# Large generated datasets
+# Keep the smoke pipeline for reproducibility instead of committing generated ROI datasets.
+data/tusimple_processed/
+
+# Local raw dataset archives should not be committed.
+data/raw_tusimple/
+*.zip
+*.tar
+*.tar.gz
+*.rar

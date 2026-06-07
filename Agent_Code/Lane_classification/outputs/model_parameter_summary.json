@@ -1,0 +1,14 @@
+{
+  "model": "ResNet18 binary classifier",
+  "input_shape": "3 x 224 x 224",
+  "num_classes": 2,
+  "class_order": [
+    "outside",
+    "inside"
+  ],
+  "total_parameters": 11177538,
+  "trainable_parameters": 11177538,
+  "classification_head_parameters": 1026,
+  "checkpoint": "checkpoints/tusimple_dynamic_resnet18_cuda_30ep.pth",
+  "onnx": "outputs/tusimple_dynamic_resnet18_cuda_30ep.onnx"
+}

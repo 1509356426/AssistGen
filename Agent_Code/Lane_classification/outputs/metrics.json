@@ -1,0 +1,25 @@
+{
+  "accuracy": 1.0,
+  "class_names": [
+    "outside",
+    "inside"
+  ],
+  "confusion_matrix": [
+    [
+      10,
+      0
+    ],
+    [
+      0,
+      10
+    ]
+  ],
+  "f1": 1.0,
+  "num_samples": 20,
+  "precision": 1.0,
+  "recall": 1.0,
+  "support": {
+    "inside": 10,
+    "outside": 10
+  }
+}

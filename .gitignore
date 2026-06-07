@@ -1,0 +1,39 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Node dependencies and build outputs
+node_modules/
+dist/
+build/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Archives and large generated artifacts
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+*.pth
+*.pt
+*.onnx
+checkpoints/
+runs/
+
+# Local/generated datasets
+data/raw_tusimple/
+data/tusimple_processed/
