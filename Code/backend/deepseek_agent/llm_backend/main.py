@@ -19,14 +19,11 @@ from app.models.conversation import Conversation, DialogueType
 from app.models.message import Message
 from sqlalchemy import select
 from app.services.conversation_service import ConversationService
-from app.services.rag_chat_service import RAGChatService
 import uuid
 import os
-from app.services.indexing_service import IndexingService
 import sys
 from app.lg_agent.lg_states import AgentState, InputState
 from app.lg_agent.utils import new_uuid
-from app.lg_agent.lg_builder import graph
 from langgraph.types import Command
 import json
 
@@ -112,10 +109,15 @@ async def chat_endpoint(request: ChatMessage):
     try:
         logger.info(f"Processing chat request for user {request.user_id} in conversation {request.conversation_id}")
         chat_service = LLMFactory.create_chat_service()
+        context_messages = await ConversationService.get_context_messages(
+            conversation_id=request.conversation_id,
+            user_id=request.user_id,
+            current_messages=request.messages,
+        )
         
         return StreamingResponse(
             chat_service.generate_stream(
-                messages=request.messages,
+                messages=context_messages,
                 user_id=request.user_id,
                 conversation_id=request.conversation_id,
                 on_complete=ConversationService.save_message
@@ -210,6 +212,8 @@ async def upload_file(
         }
         
         # 4. 处理文件索引
+        from app.services.indexing_service import IndexingService
+
         indexing_service = IndexingService()
         index_result = await indexing_service.process_file(file_info)
         
@@ -227,6 +231,8 @@ async def rag_chat_endpoint(request: RAGChatRequest):
     """基于文档的问答接口"""
     try:
         logger.info(f"Processing RAG chat request for user {request.user_id}")
+        from app.services.rag_chat_service import RAGChatService
+
         rag_chat_service = RAGChatService()
         
         return StreamingResponse(
@@ -308,6 +314,8 @@ async def langgraph_query(
     """使用LangGraph处理用户查询，支持图片上传"""
     try:
         logger.info(f"Processing LangGraph query for user {user_id} and conversation {conversation_id}")
+        from app.lg_agent.lg_builder import graph
+
         
         # 处理图片上传
         image_path = None
@@ -426,6 +434,8 @@ async def langgraph_resume(request: LangGraphResumeRequest):
     """继续执行LangGraph流程"""
     try:
         logger.info(f"Resuming LangGraph query for user {request.user_id} with conversation {request.conversation_id}")
+        from app.lg_agent.lg_builder import graph
+
         
         # 使用会话ID作为线程ID
         thread_config = {"configurable": {"thread_id": request.conversation_id}}

@@ -1,7 +1,13 @@
 import uvicorn
 from app.core.logger import get_logger
 import os
+import warnings
 from pathlib import Path
+from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+
+with warnings.catch_warnings(record=True):
+    warnings.simplefilter("always", LangChainPendingDeprecationWarning)
+    __import__("langgraph.checkpoint.base")
 
 logger = get_logger(service="server")
 
@@ -22,4 +28,4 @@ def start_server():
     )
 
 if __name__ == "__main__":
-    start_server() 
+    start_server()

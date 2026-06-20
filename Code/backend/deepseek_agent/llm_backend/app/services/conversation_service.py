@@ -17,6 +17,38 @@ class ConversationService:
         return title
 
     @staticmethod
+    def get_latest_user_content(messages: List[Dict]) -> str:
+        """获取消息列表中最后一条用户消息的内容"""
+        return next(
+            (
+                message.get("content", "")
+                for message in reversed(messages)
+                if message.get("role") == "user"
+            ),
+            "",
+        )
+
+    @staticmethod
+    async def get_context_messages(
+        conversation_id: int,
+        user_id: int,
+        current_messages: List[Dict],
+    ) -> List[Dict]:
+        """组合数据库会话历史与当前请求消息"""
+        history = await ConversationService.get_conversation_messages(
+            conversation_id,
+            user_id,
+        )
+        context = [
+            {
+                "role": "assistant" if message["sender"] == "assistant" else "user",
+                "content": message["content"],
+            }
+            for message in history
+        ]
+        return context + current_messages
+
+    @staticmethod
     async def create_conversation(user_id: int) -> int:
         """创建新会话"""
         async with AsyncSessionLocal() as db:
@@ -57,7 +89,7 @@ class ConversationService:
                 messages_count = len(result.all())
                 
                 # 获取用户的问题内容
-                user_content = next((msg["content"] for msg in messages if msg["role"] == "user"), "")
+                user_content = ConversationService.get_latest_user_content(messages)
                 
                 # 如果是第一条消息，更新会话标题
                 if messages_count == 0:
@@ -197,4 +229,4 @@ class ConversationService:
                 logger.info(f"已更新会话 {conversation_id} 的名称为 {name}")
         except Exception as e:
             logger.error(f"更新会话名称失败: {str(e)}", exc_info=True)
-            raise 
+            raise

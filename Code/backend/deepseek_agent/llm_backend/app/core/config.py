@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from enum import Enum
 from pathlib import Path
 
@@ -11,6 +11,12 @@ class ServiceType(str, Enum):
     OLLAMA = "ollama"
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
+
     # Deepseek settings
     DEEPSEEK_API_KEY: str
     DEEPSEEK_BASE_URL: str
@@ -91,9 +97,4 @@ class Settings(BaseSettings):
         """构建Neo4j连接URL"""
         return f"{self.NEO4J_URL}"
     
-    class Config:
-        env_file = str(ENV_FILE)  # 使用绝对路径
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-
-settings = Settings() 
+settings = Settings()
