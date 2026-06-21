@@ -75,6 +75,7 @@ class DeepseekService:
 
                 if on_complete and user_id is not None and conversation_id is not None:
                     await on_complete(user_id, conversation_id, messages, cached_response)
+                yield "data: [DONE]\n\n"
                 return
 
             # 缓存未命中,调用API
@@ -87,11 +88,9 @@ class DeepseekService:
 
             async for chunk in response:
                 if chunk.choices and chunk.choices[0].delta.content:
-                    # 使用 ensure_ascii=False 来保持中文字符
-                    content = json.dumps(chunk.choices[0].delta.content, ensure_ascii=False)
-
+                    content = chunk.choices[0].delta.content
                     full_response.append(content)
-                    yield f"data: {content}\n\n"
+                    yield f"data: {json.dumps(content, ensure_ascii=False)}\n\n"
             
             # 完整响应
             complete_response = "".join(full_response)
@@ -106,11 +105,16 @@ class DeepseekService:
             # 如果有回调，执行回调
             if on_complete and user_id is not None and conversation_id is not None:
                 await on_complete(user_id, conversation_id, messages, complete_response)
+            yield "data: [DONE]\n\n"
                 
         except Exception as e:
             logger.error(f"Error in generate_stream: {str(e)}", exc_info=True)
-            error_msg = json.dumps(f"生成回复时出错: {str(e)}", ensure_ascii=False)
-            yield f"data: {error_msg}\n\n"
+            error_event = {
+                "type": "error",
+                "message": f"生成回复时出错: {str(e)}",
+            }
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
 
     async def generate(self, messages: List[Dict]) -> str:
         """非流式生成回复"""
@@ -123,4 +127,4 @@ class DeepseekService:
             return response.choices[0].message.content
         except Exception as e:
             print(f"Generation error: {str(e)}")
-            raise 
+            raise

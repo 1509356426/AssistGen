@@ -44,6 +44,7 @@ class OllamaService:
                         }
                     }
                 ) as response:
+                    response.raise_for_status()
                     async for line in response.content:
                         if line:
                             try:
@@ -61,12 +62,16 @@ class OllamaService:
             if on_complete:
                 complete_response = "".join(full_response)
                 await on_complete(user_id, conversation_id, messages, complete_response)
+            yield "data: [DONE]\n\n"
 
         except Exception as e:
             logger.error(f"Stream generation error: {str(e)}")
-            error_msg = json.dumps(f"生成回复时出错: {str(e)}", ensure_ascii=False)
-            yield f"data: {error_msg}\n\n"
-            raise
+            error_event = {
+                "type": "error",
+                "message": f"生成回复时出错: {str(e)}",
+            }
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
 
     async def generate(self, messages: List[Dict]) -> str:
         """非流式生成回复"""
@@ -89,4 +94,4 @@ class OllamaService:
 
         except Exception as e:
             print(f"Generation error: {str(e)}")
-            raise 
+            raise

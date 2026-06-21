@@ -417,6 +417,7 @@ import { marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import MarkdownIt from 'markdown-it'
 import { ApiService, type Conversation } from '../services/api'
+import { readSSEStream } from '../utils/sse'
 import { AuthService } from '../services/api'
 import { useUserStore } from '../stores/user'
 import { useConversationStore } from '../stores/conversation'
@@ -733,24 +734,14 @@ const handleSearch = async (reader: ReadableStreamDefaultReader<Uint8Array>) => 
   if (!reader) throw new Error('No reader available')
 
   let currentContent = ''
-  const decoder = new TextDecoder()
 
   try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      const chunk = decoder.decode(value)
-      const lines = chunk.split('\n')
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        
-        const content = line.slice(6).trim()
-        if (!content || content === '[DONE]') continue
-
+    await readSSEStream(reader, (content) => {
         try {
           const data = JSON.parse(content)
+          if (typeof data === 'object' && data?.type === 'error') {
+            throw new Error(data.message || '搜索流响应失败')
+          }
           
           switch (data.type) {
             case 'search_start':
@@ -806,7 +797,7 @@ const handleSearch = async (reader: ReadableStreamDefaultReader<Uint8Array>) => 
 
             default:
               // 处理普通文本内容
-              const cleanContent = content.replace(/^"|"$/g, '').replace(/\\n/g, '\n')
+              const cleanContent = typeof data === 'string' ? data : ''
               currentContent += cleanContent
 
               // 更新消息内容
@@ -823,9 +814,9 @@ const handleSearch = async (reader: ReadableStreamDefaultReader<Uint8Array>) => 
           scrollToBottom()
         } catch (e) {
           console.error('Error parsing message:', e)
+          throw e
         }
-      }
-    }
+    })
   } catch (error) {
     console.error('Error:', error)
     messages.value[messages.value.length - 1].content = '抱歉，搜索时发生了错误，请稍后重试。'
@@ -1150,31 +1141,7 @@ const handleChatStream = async (reader: ReadableStreamDefaultReader<Uint8Array>)
     await ApiService.handleChatStream(reader, (chunk) => {
       // 清理内容的函数
       const cleanChunkContent = (content: string) => {
-        if (!content) return '';
-        
-        // 移除可能的data:前缀
-        content = content.replace(/^data:\s*/g, '').trim();
-        
-        // 移除多余的引号
-        // 如果文本以引号开始和结束，移除它们
-        content = content.replace(/^["']|["']$/g, '');
-        
-        // 移除每行开头的引号
-        content = content.split('\n').map(line => line.replace(/^["']\s*/, '')).join('\n');
-        
-        // 移除每行结尾的引号
-        content = content.split('\n').map(line => line.replace(/\s*["']$/, '')).join('\n');
-        
-        // 移除文本中连续的两个引号
-        content = content.replace(/""/g, '');
-        
-        // 替换转义的换行符
-        content = content.replace(/\\n/g, '\n');
-        
-        // 替换转义的引号
-        content = content.replace(/\\"/g, '"');
-        
-        return content;
+        return content || ''
       };
       
       const lastMessage = messages.value[messages.value.length - 1]
@@ -1391,46 +1358,20 @@ const sendPopupMessage = async () => {
 
 // 处理弹窗的聊天流
 const handlePopupChatStream = async (reader: ReadableStreamDefaultReader<Uint8Array>) => {
-  const decoder = new TextDecoder()
   let currentContent = ''
   
   try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-  
-      const chunk = decoder.decode(value)
-      const lines = chunk.split('\n')
-      
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        
-        const content = line.slice(6) // 移除 'data: ' 前缀
-        if (content === '[DONE]') continue
-        
-        // 处理所有可能的换行符形式
-        if (content === '"\\n\\n"' || content === '"\n\n"' || content === '\n\n') {
-          currentContent += '\n\n'
-          continue
-        }
-        
-        // 移除引号
-        let cleanedContent = content
-        if (cleanedContent.startsWith('"') && cleanedContent.endsWith('"')) {
-          cleanedContent = cleanedContent.slice(1, -1)
-        }
-        
-        // 处理转义的换行符
-        cleanedContent = cleanedContent.replace(/\\n\\n/g, '\n\n').replace(/\\n/g, '\n')
-  
-        // 添加到当前内容
-        currentContent += cleanedContent
-        
-        // 更新最后一条消息的内容
-        const lastMessage = popupMessages.value[popupMessages.value.length - 1]
-        lastMessage.content = currentContent
+    await readSSEStream(reader, (data) => {
+      const parsed = JSON.parse(data)
+      if (typeof parsed === 'object' && parsed?.type === 'error') {
+        throw new Error(parsed.message || 'Agent 流响应失败')
       }
-    }
+      if (typeof parsed !== 'string') return
+
+      currentContent += parsed
+      const lastMessage = popupMessages.value[popupMessages.value.length - 1]
+      lastMessage.content = currentContent
+    })
   } catch (error) {
     console.error('Error handling chat stream:', error)
     const lastMessage = popupMessages.value[popupMessages.value.length - 1]

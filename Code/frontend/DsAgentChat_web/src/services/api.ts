@@ -2,6 +2,7 @@ import { ChatMessage } from '../types'
 import axios from './axios'
 import router from '../router'
 import { sha256 } from '../utils/crypto'
+import { readSSEStream } from '../utils/sse'
 
 // 接口定义
 interface StreamChunk {
@@ -49,94 +50,39 @@ export class ApiService {
     return `${this.baseUrl}${path}`
   }
 
-  // 处理聊天消息流
+  // 处理带跨分片缓冲的聊天消息流
   static async handleChatStream(reader: ReadableStreamDefaultReader<Uint8Array>, 
                               onChunk: (chunk: StreamChunk) => void) {
-    const decoder = new TextDecoder()
-    let thinkContent = ''
-    let responseContent = ''
-    let isInThinkingMode = false
-    
+    let fullContent = ''
+
     try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        
-        // 解码当前数据块
-        const text = decoder.decode(value)
-        
-        // 处理数据行
-        const lines = text.split('\n')
-        
-        for (const line of lines) {
-          // 检查是否是数据行
-          if (line.startsWith('data: ')) {
-            const content = line.slice(6).trim() // 移除 'data: ' 前缀
-            
-            // 检查是否是结束标记
-            if (content === '[DONE]') continue
-            
-            // 清理内容 (移除引号和转义)
-            const cleanContent = content
-              .replace(/^"|"$/g, '') // 移除开头和结尾的引号
-              .replace(/\\"/g, '"')  // 处理转义的引号
-              .replace(/\\n/g, '\n'); // 处理转义的换行符
-            
-            // 检查是否包含思考过程标记
-            if (content.includes('<think>')) {
-              isInThinkingMode = true
-              const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/);
-              
-              if (thinkMatch && thinkMatch[1]) {
-                // 如果找到完整标签，提取内容
-                thinkContent = thinkMatch[1].trim()
-                  .replace(/^"|"$/g, '') // 额外清理引号
-                  .replace(/\\"/g, '"');
-                onChunk({ type: 'think', content: thinkContent })
-                isInThinkingMode = false
-              } else {
-                // 提取部分内容
-                const startContent = content.split('<think>')[1];
-                if (startContent) {
-                  thinkContent = startContent.trim()
-                    .replace(/^"|"$/g, '') // 额外清理引号
-                    .replace(/\\"/g, '"');
-                  onChunk({ type: 'think', content: thinkContent })
-                }
-              }
-            } else if (content.includes('</think>')) {
-              // 处理结束标签
-              isInThinkingMode = false
-              
-              // 提取结束标签前的内容
-              const endContent = content.split('</think>')[0];
-              if (endContent) {
-                thinkContent += endContent.trim()
-                  .replace(/^"|"$/g, '') // 额外清理引号
-                  .replace(/\\"/g, '"');
-                onChunk({ type: 'think', content: thinkContent })
-              }
-              
-              // 检查标签后的内容
-              const afterThink = content.split('</think>')[1];
-              if (afterThink && afterThink.trim()) {
-                responseContent += afterThink.trim()
-                  .replace(/^"|"$/g, '') // 额外清理引号
-                  .replace(/\\"/g, '"');
-                onChunk({ type: 'response', content: responseContent })
-              }
-            } else if (isInThinkingMode) {
-              // 思考模式中的内容
-              thinkContent += cleanContent;
-              onChunk({ type: 'think', content: thinkContent })
-            } else {
-              // 普通响应
-              responseContent += cleanContent;
-              onChunk({ type: 'response', content: responseContent })
-            }
-          }
+      await readSSEStream(reader, (data) => {
+        const parsed = JSON.parse(data)
+        if (typeof parsed === 'object' && parsed?.type === 'error') {
+          throw new Error(parsed.message || '流式响应失败')
         }
-      }
+        if (typeof parsed !== 'string') return
+
+        fullContent += parsed
+        const thinkStart = fullContent.indexOf('<think>')
+        const thinkEnd = fullContent.indexOf('</think>')
+
+        if (thinkStart !== -1) {
+          const end = thinkEnd === -1 ? fullContent.length : thinkEnd
+          onChunk({
+            type: 'think',
+            content: fullContent.slice(thinkStart + '<think>'.length, end),
+          })
+          if (thinkEnd !== -1) {
+            onChunk({
+              type: 'response',
+              content: fullContent.slice(thinkEnd + '</think>'.length),
+            })
+          }
+        } else if (!'<think>'.startsWith(fullContent)) {
+          onChunk({ type: 'response', content: fullContent })
+        }
+      })
     } catch (error) {
       console.error('Error reading stream:', error)
       throw error
